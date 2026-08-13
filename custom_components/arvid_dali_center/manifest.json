@@ -1,0 +1,17 @@
+{
+  "domain": "arvid_dali_center",
+  "name": "ARVID DALI Center",
+  "version": "1.2.68",
+  "codeowners": [
+    "@Camostrel"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/Camostrel/arvid-dali-center",
+  "issue_tracker": "https://github.com/Camostrel/arvid-dali-center/issues",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "requirements": [
+    "cryptography",
+    "paho-mqtt"
+  ]
+}

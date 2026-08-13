@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+site.json
+
+# автопусконаладка: сгенерированные скрипты (эмитятся из import_project.py emit)
+tools/apply_*.py
+tools/*/apply_*.py
+tools/*.state.json
+
+# Файл констант автопусконаладки с РЕАЛЬНЫМ токеном — в git только .example
+tools/arvid_apply.conf

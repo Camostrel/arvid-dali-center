@@ -1,0 +1,87 @@
+set_autobrightness:
+  name: Автояркость — включить/выключить
+  description: >-
+    Включает или выключает поддержание освещённости (恒照) у датчиков в выбранной области,
+    устройстве или сущности. Привязка на контроллере СОХРАНЯЕТСЯ — датчик просто перестаёт
+    управлять светом, поэтому включение обратно мгновенно и не грузит DALI-шину.
+    Выбор переживает перезагрузку Home Assistant.
+  target:
+    entity:
+      integration: arvid_dali_center
+    device:
+      integration: arvid_dali_center
+  fields:
+    enabled:
+      name: Включить
+      description: >-
+        true — автояркость работает, false — датчик не управляет светом.
+        Не указывайте вместе с «Переключить».
+      required: false
+      example: false
+      selector:
+        boolean:
+    toggle:
+      name: Переключить
+      description: >-
+        Инвертировать состояние — для КЛАВИШИ ПАНЕЛИ (одна кнопка включает и выключает).
+        Если в цели есть хоть один включённый датчик — выключается вся цель, иначе включается вся.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+set_effective_time:
+  name: Расписание работы датчиков
+  description: >-
+    Задаёт окна времени, в которые датчик управляет светом (effective time). Окна исполняет САМ
+    ШЛЮЗ по своим часам. Текущая привязка (лампы и коридор освещённости) сохраняется.
+    Массовая запись нагружает DALI-шину — задавайте паузу между устройствами.
+  target:
+    entity:
+      integration: arvid_dali_center
+    device:
+      integration: arvid_dali_center
+  fields:
+    windows:
+      name: Окна времени
+      description: >-
+        Список окон "ЧЧ:ММ-ЧЧ:ММ", например ["08:00-13:00", "14:00-17:30"].
+        Вне окон датчик не управляет светом.
+      required: false
+      example: '["08:00-17:30"]'
+      selector:
+        object:
+    function:
+      name: Функция
+      description: Какой функции датчика задаётся расписание.
+      required: false
+      default: autobrightness
+      selector:
+        select:
+          options:
+            - label: Автояркость (датчик освещённости)
+              value: autobrightness
+            - label: Движение (датчик присутствия)
+              value: motion
+            - label: Обе
+              value: both
+    clear:
+      name: Снять расписание
+      description: true — убрать окна (датчик работает круглосуточно). Поле «Окна» игнорируется.
+      required: false
+      default: false
+      selector:
+        boolean:
+    pace:
+      name: Пауза между устройствами, с
+      description: >-
+        Защита от затора DALI-шины при массовой записи (этаж/объект). Увеличьте, если появляются
+        отказы «шина занята».
+      required: false
+      default: 0.3
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 0.1
+          unit_of_measurement: с

@@ -1,0 +1,50 @@
+#!/bin/sh
+# run_apply.sh — запустить автопусконаладку В ФОНЕ и сразу вернуть управление.
+#
+# ЗАЧЕМ. `shell_command` в Home Assistant обрывает процесс через 60 секунд, а прогон объекта
+# (на школе №45 это 216 групп) идёт 6–8 минут: каждая группа — delGroup + addGroup + readGroup
+# плюс пауза, чтобы шина не захлебнулась. Гонять такое из терминала неудобно, поэтому карточка
+# запускает эту обёртку: она стартует python отдельным процессом, пишет весь вывод в журнал и
+# завершается мгновенно — таймаут HA больше ни при чём.
+#
+# ВЫЗОВ (из shell_command):  sh /config/tools/run_apply.sh apply_voronezh.py --apply --only groups
+# ЖУРНАЛ:                    /config/tools/apply_voronezh.log   (читает карточка, кнопка «Журнал»)
+#
+# ⚠ ПОВТОРНЫЙ ЗАПУСК БЛОКИРУЕТСЯ, пока идёт предыдущий: два процесса на одной DALI-шине —
+# это гонка команд и заведомо недостоверный результат.
+
+set -eu
+
+DIR=/config/tools
+SCRIPT="${1:-}"
+[ -n "$SCRIPT" ] || { echo "не указан скрипт: sh run_apply.sh <apply_*.py> [аргументы]"; exit 2; }
+shift || true
+
+[ -f "$DIR/$SCRIPT" ] || { echo "нет файла $DIR/$SCRIPT"; exit 2; }
+
+BASE="${SCRIPT%.py}"
+LOG="$DIR/$BASE.log"
+PIDFILE="$DIR/$BASE.pid"
+
+# уже бежит? — не плодим второй процесс на ту же шину
+if [ -f "$PIDFILE" ]; then
+    OLD=$(cat "$PIDFILE" 2>/dev/null || echo "")
+    if [ -n "$OLD" ] && kill -0 "$OLD" 2>/dev/null; then
+        echo "УЖЕ ВЫПОЛНЯЕТСЯ (pid $OLD). Журнал: $LOG"
+        exit 1
+    fi
+    rm -f "$PIDFILE"
+fi
+
+# журнал перезаписываем: интересен ПОСЛЕДНИЙ прогон, а история — в событиях HA
+{
+    echo "=== запуск $(date '+%Y-%m-%d %H:%M:%S'): $SCRIPT $*"
+} > "$LOG"
+
+# отвязываем от родителя: HA закроет свой процесс сразу, наш должен пережить это
+nohup python3 "$DIR/$SCRIPT" "$@" >> "$LOG" 2>&1 &
+PID=$!
+echo "$PID" > "$PIDFILE"
+
+echo "ЗАПУЩЕНО (pid $PID): $SCRIPT $*"
+echo "Журнал: $LOG — смотрите кнопкой «Журнал» в карточке."

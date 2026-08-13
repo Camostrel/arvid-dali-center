@@ -1,0 +1,104 @@
+blueprint:
+  name: ARVID DALI — клавиша панели управляет автояркостью
+  description: >-
+    Нажатие клавиши на панели DALI включает / выключает / переключает поддержание освещённости
+    (автояркость) в выбранном пространстве или у выбранных датчиков.
+
+
+    Автояркость ПРИОСТАНАВЛИВАЕТСЯ, а не стирается: настройка (цель, коридор lux, окна работы)
+    остаётся на контроллере, обратное включение мгновенно и не нагружает DALI-шину.
+
+
+    Привязка клавиши к свету на самом контроллере при этом не затрагивается — ту же клавишу можно
+    использовать и для управления лампами, задав её в карточке.
+  domain: automation
+  source_url: https://github.com/NickSha/arvid-ha-dali-center
+  input:
+    panel:
+      name: Панель
+      description: Сущность события панели (event.*)
+      selector:
+        entity:
+          integration: arvid_dali_center
+          domain: event
+    key_no:
+      name: Номер клавиши
+      description: Клавиша панели (1…8)
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 8
+          mode: box
+    gesture:
+      name: Жест
+      default: click
+      selector:
+        select:
+          options:
+            - label: короткое нажатие
+              value: click
+            - label: удержание
+              value: hold
+            - label: двойное нажатие
+              value: double
+    what:
+      name: Что делать
+      default: toggle
+      selector:
+        select:
+          options:
+            - label: переключить (одна клавиша вкл/выкл)
+              value: toggle
+            - label: выключить автояркость
+              value: "off"
+            - label: включить автояркость
+              value: "on"
+    targets:
+      name: Где
+      description: >-
+        Пространство (все его датчики освещённости) или конкретные датчики.
+        ⚠ Пространство сработает, только если оно НАЗНАЧЕНО устройствам в Home Assistant —
+        автоматически область не проставляется.
+      selector:
+        target:
+          entity:
+            integration: arvid_dali_center
+
+mode: single
+max_exceeded: silent
+
+variables:
+  gesture: !input gesture
+  key_no: !input key_no
+  what: !input what
+
+trigger:
+  - platform: state
+    entity_id: !input panel
+
+condition:
+  # У event-сущности нажатие приходит СМЕНОЙ СОСТОЯНИЯ (timestamp). С v1.2.45 тип события —
+  # `key<N>_<жест>` (клавиша видна в триггере), а сам жест продублирован атрибутом `gesture`
+  # вместе с `key_no` — фильтруем по ним, чтобы условие не зависело от формы типа.
+  - condition: template
+    value_template: >-
+      {{ trigger.to_state is not none
+         and trigger.to_state.attributes.get('gesture') == gesture
+         and trigger.to_state.attributes.get('key_no') | int(-1) == key_no | int }}
+
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ what == 'toggle' }}"
+        sequence:
+          - service: arvid_dali_center.set_autobrightness
+            target: !input targets
+            data:
+              toggle: true
+    default:
+      - service: arvid_dali_center.set_autobrightness
+        target: !input targets
+        data:
+          enabled: "{{ what == 'on' }}"

@@ -29,6 +29,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util, slugify
 
 from .const import DOMAIN
+from .identity import MODES as IDENTITY_MODES
 from .coordinator import dev_state_key
 from .eventlog import SIGNAL_EVENTLOG, get_eventlog
 from .store import (
@@ -187,6 +188,7 @@ def async_register(hass: HomeAssistant) -> None:
                 # чистка реестра HA от пустых карточек устройств (v1.2.47)
                 ws_registry_orphans, ws_registry_cleanup, ws_registry_trash, ws_apply_log,
                 ws_apply_stop,
+                ws_identity_mode, ws_set_identity_mode,
                 # карта имён для переезда объекта (v1.2.55): только чтение + область.
                 # Имена применяет `ws_rename` — он не переписан ради этой задачи.
                 ws_namemap_files, ws_namemap_table, ws_set_area, ws_set_group_labels,
@@ -674,6 +676,47 @@ async def ws_apply_stop(hass, connection, msg):
                         base, res.get("pid"))
     else:
         _LOGGER.info("apply_stop %s: %s", base, res.get("error"))
+    connection.send_result(msg["id"], res)
+
+
+@websocket_api.websocket_command({vol.Required("type"): "arvid_dali_center/identity_mode"})
+@callback
+def ws_identity_mode(hass, connection, msg):
+    """Текущий режим идентичности и МАСШТАБ его смены (только чтение, не-admin).
+
+    Карточка показывает режим постоянным бейджем: через месяц никто не вспомнит, чем живёт
+    объект, а поведение имён и хранилищ от этого зависит напрямую (docs/ADDRESS_IDENTITY.md).
+    """
+    from . import identity_ops
+    connection.send_result(msg["id"], identity_ops.scope(hass))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): "arvid_dali_center/set_identity_mode",
+    vol.Required("mode"): str,               # devsn | addr
+    vol.Required("confirm"): bool,           # без явного подтверждения не делаем ничего
+})
+@websocket_api.async_response
+async def ws_set_identity_mode(hass, connection, msg):
+    """Переключить режим идентичности. ⚠ ДЕСТРУКТИВНО и НЕОБРАТИМО без пересканирования.
+
+    Смена — операция, а не флаг: сносит поколение старых сущностей и карточек, чистит
+    хранилища, метёт корзину HA и только потом пишет режим (см. `identity_ops`). Иначе
+    прежние записи остались бы сиротами и воскресали из корзины при возврате режима.
+
+    Гейта «шлюз должен быть пуст» здесь НЕТ намеренно: он не выполним по определению —
+    устройства физически на шине и вернутся первым же сканом. Вместо гейта — явное
+    подтверждение с показанным масштабом (`identity_mode` отдаёт числа заранее).
+    """
+    from . import identity_ops
+    if not msg.get("confirm"):
+        connection.send_error(msg["id"], "not_confirmed", "нужно явное подтверждение")
+        return
+    if msg["mode"] not in IDENTITY_MODES:
+        connection.send_error(msg["id"], "bad_request", f"режим должен быть одним из {IDENTITY_MODES}")
+        return
+    res = await identity_ops.switch_mode(hass, msg["mode"])
     connection.send_result(msg["id"], res)
 
 

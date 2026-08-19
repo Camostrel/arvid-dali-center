@@ -16,12 +16,15 @@ import voluptuous as vol
 
 from homeassistant.config_entries import (
     SOURCE_IMPORT,
+    ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
+    OptionsFlow,
 )
 from homeassistant.helpers import config_validation as cv
 
 from .const import CONF_BIND_IP, CONF_GW_SN, DOMAIN
+from .identity import MODE_ADDR, MODE_DEVSN
 from .transport.core import auto_iface, discover_all
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,6 +34,10 @@ class ArvidDaliConfigFlow(ConfigFlow, domain=DOMAIN):
     """Поток настройки: одна запись на шлюз, выбор контроллеров вручную."""
 
     VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(config_entry: ConfigEntry) -> "ArvidDaliOptionsFlow":
+        return ArvidDaliOptionsFlow()
 
     def __init__(self) -> None:
         # переносим между шагами user → select
@@ -116,3 +123,48 @@ class ArvidDaliConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(
             title=f"DALI Gateway {data[CONF_GW_SN]}", data=data
         )
+
+
+class ArvidDaliOptionsFlow(OptionsFlow):
+    """Настройки интеграции. Сейчас здесь ровно одно — РЕЖИМ ИДЕНТИЧНОСТИ.
+
+    ⚠ Почему настройка живёт тут, а не в рабочей карточке: её дёргают один раз на объекте и
+    больше не трогают. В карточке, среди ежедневных кнопок, такому переключателю не место —
+    он деструктивный (см. `identity_ops`). Карточка режим только ПОКАЗЫВАЕТ.
+
+    ⚠ Режим — ОДИН НА ОБЪЕКТ (решение 2026-08-19), хотя записей у нас по одной на шлюз.
+    Поэтому меняется он не в опциях записи, а в общем хранилище: открыть можно из настроек
+    любого контроллера, результат один и тот же.
+    """
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        from . import identity_ops
+        info = identity_ops.scope(self.hass)
+        if user_input is not None:
+            mode = user_input["identity_mode"]
+            if mode == info["mode"]:
+                return self.async_create_entry(title="", data={})
+            if not user_input.get("confirm"):
+                return self.async_show_form(
+                    step_id="init", data_schema=self._schema(info),
+                    errors={"base": "confirm_required"},
+                )
+            res = await identity_ops.switch_mode(self.hass, mode)
+            _LOGGER.warning("режим идентичности переключён через настройки: %s", res)
+            return self.async_create_entry(title="", data={})
+        return self.async_show_form(step_id="init", data_schema=self._schema(info),
+                                    description_placeholders={
+                                        "devices": str(info["devices"]),
+                                        "entities": str(info["entities"]),
+                                        "cards": str(info["device_cards"]),
+                                    })
+
+    @staticmethod
+    def _schema(info: dict) -> vol.Schema:
+        return vol.Schema({
+            vol.Required("identity_mode", default=info["mode"]): vol.In({
+                MODE_DEVSN: "По серийнику устройства (штатный)",
+                MODE_ADDR: "По DALI-адресу (серийникам верить нельзя)",
+            }),
+            vol.Optional("confirm", default=False): bool,
+        })

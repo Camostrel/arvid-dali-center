@@ -226,6 +226,14 @@ class ArvidDaliPanel extends HTMLElement {
   }
 
   // ── баннер состояния связи активного шлюза ───────────────────────────────
+  // Баннер режима идентичности: в штатном режиме молчит, в адресном — виден всегда.
+  _identityBanner() {
+    if (this._state.identityMode !== 'addr') return '';
+    return `<div class="idmode">Режим идентичности: <b>по DALI-адресу</b> — устройства опознаются
+      по координате на шине, серийник справочный. Перенумерация адресов сдвинет имена;
+      замена устройства на том же адресе унаследует имя и счётчик энергии прежнего.</div>`;
+  }
+
   _connBanner() {
     const g = this._activeGw();
     if (!g || !g.state || g.state === 'online') return '';
@@ -258,6 +266,14 @@ class ArvidDaliPanel extends HTMLElement {
         this._state.activeGw = ok ? saved : this._state.gateways[0].gwSn;
       }
     } catch (e) { this._toast('Ошибка загрузки шлюзов: ' + e.message, true); }
+    // Режим идентичности (v1.2.75). Показываем ПОСТОЯННО, если он не штатный: от него зависит,
+    // чем ключуются имена и хранилища, а через месяц никто не вспомнит, чем живёт объект.
+    // Переключается он не отсюда, а в настройках интеграции — это разовое и деструктивное
+    // действие, среди ежедневных кнопок ему не место.
+    try {
+      const m = await this._ws({ type: 'arvid_dali_center/identity_mode' });
+      this._state.identityMode = m && m.mode;
+    } catch (e) { /* старое ядро без этой команды — молча работаем как раньше */ }
     this._state.loading = false;
     await this._loadDevices();
   }
@@ -2186,6 +2202,7 @@ class ArvidDaliPanel extends HTMLElement {
         </div>
       </header>
       ${gwNav}
+      ${this._identityBanner()}
       ${this._connBanner()}
       ${this._eventsPanel()}
       <div class="toolbar">
@@ -2990,6 +3007,9 @@ const STYLE = `
 .chip:hover{border-color:#7cc1ec;background:#fff}
 .chip.on{border-color:#0284C7;background:#fff;box-shadow:0 2px 10px rgba(2,132,199,.18)}
 .chip-t{font-weight:600;font-size:13px;color:#0F172A}.chip-s{font-size:11px;color:#64748B}
+.idmode{margin:8px 12px;padding:10px 12px;border-radius:8px;background:#FEF3C7;color:#92400E;border:1px solid #FCD34D;font-size:13px;line-height:1.45}
+.idmode b{color:#78350F}
+
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .btn{display:inline-flex;align-items:center;gap:8px;padding:0 16px;min-height:44px;border-radius:12px;border:1px solid transparent;cursor:pointer;font:inherit;font-size:14px;font-weight:600;transition:.18s}
 .btn:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(2,132,199,.45)}
@@ -3111,4 +3131,4 @@ option{background:#eaf3ff;color:#0F172A}
 customElements.define('arvid-dali-panel', ArvidDaliPanel);
 window.customCards = window.customCards || [];
 window.customCards.push({ type: 'arvid-dali-panel', name: 'ARVID DALI Panel', description: 'Управление интеграцией ARVID DALI Center.' });
-console.info('%c ARVID-DALI-PANEL %c v1.2.74 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');
+console.info('%c ARVID-DALI-PANEL %c v1.2.75 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');

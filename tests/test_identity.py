@@ -228,5 +228,70 @@ class TestSingleSourceOfLightTypes(unittest.TestCase):
                                      "_LIGHT_TYPES объявлен литералом — берите из identity.py")
 
 
+class TestAddrModeDisablesSerialMachinery(unittest.TestCase):
+    """Шаг 7: механизмы, существующие ТОЛЬКО ради серийника, в адресном режиме не работают.
+
+    Если оставить их включёнными, они начнут «чинить» то, что чинить не надо: re-link уведёт
+    запись с адреса, потому что тот же серийник нашёлся на другом, а вытеснение серийника
+    сделает живое устройство осиротевшим. Оба отказа тихие.
+    """
+
+    def _src(self, rel="coordinator.py"):
+        return (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
+                / "arvid_dali_center" / rel).read_text(encoding="utf-8")
+
+    def test_relink_gated(self):
+        src = self._src()
+        self.assertIn("if (not addr_mode and is_valid_devsn(e.get(\"devSn\")) and ident in live_ids):",
+                      src, "re-link в скане не закрыт гейтом режима")
+        self.assertIn("not addr_mode_load", src, "re-link при загрузке персиста не закрыт гейтом")
+
+    def test_orphaning_replaced_by_signal(self):
+        """Смена серийника на адресе в адресном режиме — СИГНАЛ, а не вытеснение (Н6)."""
+        src = self._src()
+        self.assertIn("serial_changed.append", src)
+        self.assertIn("if addr_mode:", src)
+
+    def test_claim_gated(self):
+        self.assertIn("if physical and not addr_mode:", self._src())
+
+    def test_name_migration_skipped(self):
+        self.assertIn("return          # в адресном режиме имена ключуются координатой",
+                      self._src())
+
+
+class TestModeSwitchIsAnOperation(unittest.TestCase):
+    """Н10: смена режима сносит поколение старых ключей, и ПОРЯДОК шагов существенный."""
+
+    def _src(self):
+        return (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
+                / "arvid_dali_center" / "identity_ops.py").read_text(encoding="utf-8")
+
+    def test_flag_is_written_last(self):
+        """Сначала собираем ключи и сносим — потом меняем правило. Иначе сбор пойдёт уже по
+        новому режиму и не найдёт ничего, а мусор останется навсегда."""
+        src = self._src()
+        self.assertLess(src.index("purge_gateway_everywhere(hass, gw_sn)"),
+                        src.index("await store.async_set(mode)"))
+        self.assertLess(src.index("purge_registry_trash(hass, uids, idents)"),
+                        src.index("await store.async_set(mode)"))
+
+    def test_trash_is_swept(self):
+        """Без выметания корзины возврат режима поднимет старые записи (закон 1, T5)."""
+        self.assertIn("purge_registry_trash", self._src())
+
+    def test_no_bus_commands(self):
+        """Смена режима НЕ трогает железо: группы и привязки живут в контроллерах."""
+        src = self._src()
+        for forbidden in ("async_request(", "writeDev", "addGroup", "delGroup", "addSensorObj"):
+            self.assertNotIn(forbidden, src, f"смена режима шлёт на шину: {forbidden}")
+
+    def test_switch_is_never_automatic(self):
+        """Годность серийников оценивает человек — программа режим сама не меняет."""
+        coord = (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
+                 / "arvid_dali_center" / "coordinator.py").read_text(encoding="utf-8")
+        self.assertNotIn("switch_mode", coord, "координатор переключает режим сам")
+
+
 if __name__ == "__main__":
     unittest.main()

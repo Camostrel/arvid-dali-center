@@ -603,7 +603,9 @@ class DaliGatewayHub:
         без переноса пользовательские имена выглядели бы стёртыми. Переносим ТОЛЬКО когда по
         `devSn` ещё пусто (чужое имя не затираем) и devSn валиден.
         """
-        from .store import get_name_store, legacy_name_key
+        from .store import get_identity_mode, get_name_store, legacy_name_key
+        if get_identity_mode(self.hass) == MODE_ADDR:
+            return          # в адресном режиме имена ключуются координатой — переносить некуда
         ns = get_name_store(self.hass)
         if not ns:
             return
@@ -863,12 +865,16 @@ class DaliGatewayHub:
             live_ids = {(self.devices[k].get("devSn"), str(self.devices[k].get("devType")))
                         for k in found_keys
                         if k in self.devices and is_valid_devsn(self.devices[k].get("devSn"))}
+            from .store import get_identity_mode
+            addr_mode_load = get_identity_mode(self.hass) == MODE_ADDR
             for k in list(self.devices.keys()):
                 if k in found_keys:
                     continue
                 e = self.devices[k]
                 ident = (e.get("devSn"), str(e.get("devType")))
-                if is_valid_devsn(e.get("devSn")) and ident in live_ids:
+                # re-link — механизм ШТАТНОГО режима (идентичность переезжает между адресами
+                # вместе с серийником). В адресном режиме адрес и есть идентичность.
+                if (not addr_mode_load and is_valid_devsn(e.get("devSn")) and ident in live_ids):
                     self.devices.pop(k, None)
                     self.online_map.pop(k, None)   # online_map АДРЕСНЫЙ → чистим по адресу
                     # sensor_active НЕ трогаем: он ключуется ИДЕНТИЧНОСТЬЮ (Fix L), а устройство
@@ -1767,6 +1773,14 @@ class DaliGatewayHub:
         # `sn5` в имени (Fix W, v1.2.0) имена старого и нового жильца РАЗНЫЕ — они не конфликтуют.
         orphaned: list[dict] = []            # снимки вытесненных записей (до перезаписи devSn)
         orphan_keys: list[str] = []          # что реально осиротело в ЭТОМ скане (для лога)
+        # АДРЕСНЫЙ РЕЖИМ (v1.2.75): идентичность — координата, серийник справочный. Значит вся
+        # машинерия выше теряет смысл: вытеснять нечего (на адресе всегда «то же» устройство),
+        # re-link по паре (devSn, devType) не нужен (переезд между адресами = другое устройство).
+        # Смена серийника на адресе перестаёт быть событием идентичности, но НЕ замалчивается:
+        # это СИГНАЛ «железку, возможно, подменили» (Н6 плана docs/ADDRESS_IDENTITY.md).
+        from .store import get_identity_mode
+        addr_mode = get_identity_mode(self.hass) == MODE_ADDR
+        serial_changed: list[tuple[str, str, str]] = []   # (ключ, было, стало)
         with self._lock:
             rebuilt: dict[str, dict] = {}
             for d in found.values():
@@ -1784,7 +1798,10 @@ class DaliGatewayHub:
                 old_sn = e.get("devSn")
                 if (physical and is_valid_devsn(old_sn) and is_valid_devsn(keep_sn)
                         and old_sn != keep_sn):
-                    orphaned.append(dict(e))         # СНИМОК старой записи (до перезаписи)
+                    if addr_mode:
+                        serial_changed.append((k, old_sn, keep_sn))
+                    else:
+                        orphaned.append(dict(e))     # СНИМОК старой записи (до перезаписи)
                 e.update({
                     "devType": d.get("devType"), "channel": d.get("channel"),
                     "address": d.get("address"), "name": d.get("name", ""),
@@ -1826,7 +1843,10 @@ class DaliGatewayHub:
                 if k in rebuilt:
                     continue
                 ident = (e.get("devSn"), str(e.get("devType")))
-                if is_valid_devsn(e.get("devSn")) and ident in live_ids:
+                # re-link — механизм ШТАТНОГО режима: там идентичность переезжает между адресами
+                # вместе с серийником. В адресном режиме адрес И ЕСТЬ идентичность: устройство,
+                # не найденное на своём адресе, — зомби, а найденное на другом — другое устройство.
+                if (not addr_mode and is_valid_devsn(e.get("devSn")) and ident in live_ids):
                     moved.append(k)                  # переехал → старую координату убираем
                     continue                         # (в rebuilt не кладём)
                 if physical and e.get("channel") in scanned:
@@ -1868,6 +1888,15 @@ class DaliGatewayHub:
         if zombied:
             self._log("scan", f"скан ({flag}): в зомби (не найдено) {len(zombied)} — записи "
                       "сохранены, удаление только вручную «Забыть»", level="warn", zombied=zombied)
+        if serial_changed:
+            # Не ошибка и не повод что-то менять автоматически: в адресном режиме имя, параметры
+            # и энергоучёт остаются на координате. Но человек должен УВИДЕТЬ — иначе подмена
+            # железки на адресе (вместе с наследованием чужих ватт-часов) пройдёт незаметно.
+            self._log("scan", f"скан ({flag}): на {len(serial_changed)} адресах СМЕНИЛСЯ серийник "
+                      "(адресный режим: имя и данные остались на координате). Если устройство "
+                      "меняли — проверьте энергоучёт: счётчик продолжится с прежнего значения",
+                      level="warn",
+                      serial_changed=[{"key": k, "was": a, "now": b} for k, a, b in serial_changed])
         if orphan_keys:
             self._log("scan", f"скан ({flag}): ОСИРОТЕВШИХ {len(orphan_keys)} — их адрес занят "
                       "другим устройством, а сами они на шине не найдены. Сущности СОХРАНЕНЫ и "
@@ -1901,7 +1930,10 @@ class DaliGatewayHub:
             # набор строился из кеша/персиста (ПАМЯТЬ) — и шлюз, который лишь помнил устройство,
             # отбирал его у того, где оно физически стоит. Теперь владение заявляет только тот,
             # кто РЕАЛЬНО УВИДЕЛ устройство на шине в этом скане (`bus_seen` + не зомби).
-            if physical:
+            # Z2-«отбор» — тоже механизм ШТАТНОГО режима: он следит, чтобы один devSn не
+            # числился за двумя шлюзами. В адресном режиме шлюз входит в САМ ключ, так что
+            # пересечься координаты разных контроллеров не могут — отбирать нечего.
+            if physical and not addr_mode:
                 mine = {e.get("devSn") for e in snapshot.values()
                         if is_valid_devsn(e.get("devSn")) and e.get("bus_seen")
                         and not e.get("zombie")}

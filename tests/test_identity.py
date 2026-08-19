@@ -17,6 +17,8 @@ import identity  # noqa: E402
 LAMP = {"devType": "0101", "channel": 0, "address": 5, "devSn": "25102C228F6CB1D5"}
 MOTION = {"devType": "0201", "channel": 0, "address": 5, "devSn": "060002CE00000000"}
 LUX = {"devType": "0202", "channel": 0, "address": 5, "devSn": "060002CE00000000"}
+PANEL = {"devType": "0308", "channel": 0, "address": 5, "devSn": "336DC33D99FB610D"}
+ROTARY = {"devType": "0300", "channel": 0, "address": 5, "devSn": "336DC33D99FB6111"}
 GW = "e22435088727"
 
 
@@ -38,7 +40,7 @@ class TestDefaultMode(unittest.TestCase):
 class TestAddrMode(unittest.TestCase):
     def test_key_shape(self):
         self.assertEqual(identity.identity_key(identity.MODE_ADDR, GW, LAMP),
-                         "addr:E22435088727:0:dali:5")
+                         "addr:E22435088727:0:01:5")
 
     def test_gw_case_normalized(self):
         """Серийник шлюза приходит и строчными, и прописными — ключ обязан быть один."""
@@ -47,8 +49,8 @@ class TestAddrMode(unittest.TestCase):
         self.assertEqual(a, b)
 
     def test_lamp_and_sensor_on_same_address_are_different_devices(self):
-        """У ламп (`dali`) и датчиков (`dali2`) адреса НЕЗАВИСИМЫ — адрес 5 у обоих не конфликт.
-        Именно на этом ломался перекрёст серийников (docs/DEVSN_CROSSWIRE.md)."""
+        """У ламп и у датчиков адреса НЕЗАВИСИМЫ — адрес 5 у обоих не конфликт. Именно на
+        сосуществовании пары на одном адресе и ломался перекрёст (docs/DEVSN_CROSSWIRE.md)."""
         self.assertNotEqual(identity.identity_key(identity.MODE_ADDR, GW, LAMP),
                             identity.identity_key(identity.MODE_ADDR, GW, MOTION))
 
@@ -57,6 +59,28 @@ class TestAddrMode(unittest.TestCase):
         В штатном режиме их склеивает общий серийник, здесь — координата."""
         self.assertEqual(identity.identity_key(identity.MODE_ADDR, GW, MOTION),
                          identity.identity_key(identity.MODE_ADDR, GW, LUX))
+
+    def test_sensor_and_panel_on_same_address_differ(self):
+        """Разбор с пользователем 2026-08-19: `dali2` — ОДИН класс на датчики и панели. Ключ по
+        пространству склеил бы датчик и панель одного адреса ТИХО. Класс типа (`02` против `03`)
+        делает вопрос «бывает ли так на железе» безразличным."""
+        self.assertNotEqual(identity.identity_key(identity.MODE_ADDR, GW, MOTION),
+                            identity.identity_key(identity.MODE_ADDR, GW, PANEL))
+
+    def test_three_classes_are_three_keys(self):
+        keys = {identity.identity_key(identity.MODE_ADDR, GW, d) for d in (LAMP, MOTION, PANEL)}
+        self.assertEqual(len(keys), 3, "лампа, датчик и панель одного адреса обязаны различаться")
+
+    def test_panel_variants_are_one_device(self):
+        """Поворотная `0300` и клавишная `0308` — обе класс `03`; на одном адресе физически
+        может быть только одна, склейка безопасна и склеивать их МОЖНО."""
+        self.assertEqual(identity.identity_key(identity.MODE_ADDR, GW, PANEL),
+                         identity.identity_key(identity.MODE_ADDR, GW, ROTARY))
+
+    def test_unknown_type_is_visible_not_silent(self):
+        """Пустой/битый `devType` даёт `??` — ключ виден глазом и не притворяется нормальным."""
+        k = identity.identity_key(identity.MODE_ADDR, GW, {"devType": "", "channel": 0, "address": 5})
+        self.assertIn(":??:", k)
 
     def test_serial_does_not_participate(self):
         """Смысл режима: перекошенный/пустой/сентинельный серийник на ключ НЕ влияет."""
@@ -104,7 +128,7 @@ class TestFunctionKey(unittest.TestCase):
 
     def test_no_identity_no_key(self):
         self.assertIsNone(identity.function_key(None, "0201"))
-        self.assertIsNone(identity.function_key("addr:X:0:dali2:5", None))
+        self.assertIsNone(identity.function_key("addr:X:0:02:5", None))
 
 
 class TestSingleSourceOfLightTypes(unittest.TestCase):

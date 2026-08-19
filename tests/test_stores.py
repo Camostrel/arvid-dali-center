@@ -18,7 +18,7 @@ import unittest
 STORE_PY = (pathlib.Path(__file__).resolve().parent.parent
             / "custom_components" / "arvid_dali_center" / "store.py")
 
-REQUIRED = ("purge_device", "purge_gateway")
+REQUIRED = ("purge_identity", "purge_gateway")
 BASE_CLASS = "PurgeableStore"
 
 

@@ -35,10 +35,10 @@ class EnergyStore(PurgeableStore):
 
     purge_name = "энергоучёт"
 
-    async def purge_device(self, devsn: str) -> int:
+    async def purge_identity(self, identity: str) -> int:
         """Ключ — devSn лампы. Зовётся из общей чистки (S5), а не отдельной строкой в
         каждой операции: сателлит легко было забыть, как забыли SensorObjStore."""
-        return 1 if self.remove(devsn) else 0
+        return 1 if self.remove(identity) else 0
 
     async def purge_gateway(self, gw_sn: str) -> int:
         """Шлюза в ключах нет — энергия висит на устройствах, снимается их чисткой."""

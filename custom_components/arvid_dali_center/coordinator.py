@@ -30,6 +30,7 @@ from .const import (
 from .eventlog import get_eventlog
 # naming — чистый модуль (ни HA, ни coordinator не тянет) → импорт на уровне модуля безопасен,
 # цикла нет. Остальные функции naming импортируются отложенно (исторически), см. _desired_entity_id.
+from .identity import LIGHT_TYPES, address_space
 from .naming import is_auto_suffix
 from .transport.core import GatewaySession, dev_key
 from .transport.decode import is_valid_devsn
@@ -96,7 +97,9 @@ def dev_state_key(devtype: str, channel: int, address: int) -> str:
 
 
 # Типы ламп (дублируем здесь, чтобы не импортировать light.py — был бы цикл).
-_LIGHT_TYPES = {"0101", "0102", "0103", "0104", "0105", "0106"}
+# Единый источник — identity.py (там же строится ключ идентичности). Вторая копия списка
+# типов ламп неизбежно разошлась бы с первой.
+_LIGHT_TYPES = LIGHT_TYPES
 
 def orphan_key(devsn: str, devtype: str) -> str:
     """Ключ ОСИРОТЕВШЕЙ записи (v1.2.2) — по ИДЕНТИЧНОСТИ, а не по адресу.
@@ -115,7 +118,7 @@ def conflict_class(devtype: str) -> str:
     РАЗНЫЕ пространства коротких адресов: адрес 5 у лампы и адрес 5 у датчика — не конфликт.
     Поэтому конфликт сопоставляем с устройством по ТРОЙКЕ (канал, класс, адрес), а не по адресу.
     """
-    return "dali" if str(devtype) in _LIGHT_TYPES else "dali2"
+    return address_space(devtype)
 
 
 class DaliAvailMixin:

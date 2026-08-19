@@ -40,7 +40,7 @@ from .store import (
     group_name_key,
     name_key,
     param_key,
-    purge_device_everywhere,
+    purge_identity_everywhere,
     purge_gateway_everywhere,
 )
 from . import group_ops, namemap, panel_ops
@@ -1182,7 +1182,7 @@ async def ws_forget_device(hass, connection, msg):
         # ЕДИНАЯ чистка (S5, v1.2.51): раньше здесь снимались только имя и параметры, из-за
         # чего «Забыть» оставлял предпочтение активности датчика и его конфигурацию функций —
         # устройство возвращалось на шину со старым наследством (DEBT §S, S3).
-        await purge_device_everywhere(hass, devsn)
+        await purge_identity_everywhere(hass, devsn)
         # v1.2.52: снимаем и КАРТОЧКУ УСТРОЙСТВА из реестра HA. Раньше «Забыть» убирал
         # сущности, а пустая карточка оставалась — и её приходилось добивать руками через
         # «Реестр» или настройки (замечание с объекта 2026-08-07). Человек ждёт, что
@@ -1308,7 +1308,7 @@ async def ws_wipe_gateway_data(hass, connection, msg):
         #    SensorObjStore не чистился нигде, а SensorPrefStore — только тут (DEBT §S).
         #    ⚠ Порядок сохранён: чистка идёт ДО сброса entity_id ниже, потому что пока имя
         #    лежит в NameStore, `_desired_entity_id` считает устройство именованным.
-        await purge_device_everywhere(hass, devsn)
+        await purge_identity_everywhere(hass, devsn)
         # 2) СУЩНОСТИ: entity_id и подпись → ШАБЛОН (не сносим — снос уходит в корзину HA).
         #    `created=True, rename=True` снимают гейт «ручной entity_id не трогаем» (Fix R): здесь
         #    это явная воля человека. Проверка на существование записи — чтобы не ждать впустую

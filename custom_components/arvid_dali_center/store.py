@@ -12,6 +12,8 @@ import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from .identity import DEFAULT_MODE, normalize_mode
+
 from .transport.decode import is_valid_devsn
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,6 +41,11 @@ _SENSORPREF_HASS_KEY = "arvid_dali_center_sensor_pref_store"
 _SENSOROBJ_STORE_KEY = "arvid_dali_center_sensor_objs"
 _SENSOROBJ_HASS_KEY = "arvid_dali_center_sensor_obj_store"
 _ALL_STORES_HASS_KEY = "arvid_dali_center_all_stores"   # реестр для чисток (S5)
+# Режим идентичности — НАСТРОЙКА ОБЪЕКТА, а не данные устройства: один режим на всю установку
+# (решение 2026-08-19). Поэтому отдельный файл и НЕ `PurgeableStore` — чистки его не трогают,
+# иначе «Стереть данные» молча возвращала бы объект в штатный режим.
+_MODE_STORE_KEY = "arvid_dali_center_identity_mode"
+_MODE_HASS_KEY = "arvid_dali_center_identity_mode_store"
 
 # Отложенная запись config-сторов: частые правки (особенно bulk — параметры/имена сотням
 # ламп) коалесятся в ОДНУ запись через задержку (был full-file rewrite на каждое изменение
@@ -70,8 +77,13 @@ class PurgeableStore:
     #: человекочитаемое имя для отчётов чистки (заполняется наследником)
     purge_name: str = "?"
 
-    async def purge_device(self, devsn: str) -> int:
-        """Убрать всё, что хранится про УСТРОЙСТВО (ключ идентичности — `devSn`)."""
+    async def purge_identity(self, identity: str) -> int:
+        """Убрать всё, что хранится про УСТРОЙСТВО, по его КЛЮЧУ ИДЕНТИЧНОСТИ.
+
+        ⚠ Имя параметра — `identity`, а не `devsn`, и это не косметика: в штатном режиме ключ
+        и правда серийник, но в адресном (docs/ADDRESS_IDENTITY.md) это координата на шине.
+        Название, которое врёт о природе ключа, — та самая ловушка, из-за которой чистки уже
+        расходились со сторами (DEBT §S)."""
         raise NotImplementedError
 
     async def purge_gateway(self, gw_sn: str) -> int:
@@ -135,14 +147,14 @@ class ParamStore(PurgeableStore):
 
     purge_name = "параметры устройств"
 
-    async def purge_device(self, devsn: str) -> int:
+    async def purge_identity(self, identity: str) -> int:
         """Ключ — devSn; попутно снимаем ЛЕГАСИ адресные ключи этого же устройства нельзя
         (адрес тут не знаем) — их снимает `purge_gateway`."""
-        return await self._purge_keys([devsn] if devsn in self._data else [])
+        return await self._purge_keys([identity] if identity in self._data else [])
 
     async def purge_gateway(self, gw_sn: str) -> int:
         """Легаси адресные ключи вида `<gw>:<devType>:<ch>:<addr>` — их не покрывает
-        `purge_device` (devSn там неизвестен). Записи на devSn шлюзу не принадлежат."""
+        `purge_identity` (devSn там неизвестен). Записи на devSn шлюзу не принадлежат."""
         return await self._purge_keys([k for k in self._data
                                        if str(k).startswith(f"{gw_sn}:")])
 
@@ -209,8 +221,8 @@ class NameStore(PurgeableStore):
 
     purge_name = "имена"
 
-    async def purge_device(self, devsn: str) -> int:
-        return await self._purge_keys([devsn] if devsn in self._data else [])
+    async def purge_identity(self, identity: str) -> int:
+        return await self._purge_keys([identity] if identity in self._data else [])
 
     async def purge_gateway(self, gw_sn: str) -> int:
         """Имена ГРУПП (`<gw>:group:<ch>:<id>`) и ЛЕГАСИ адресные ключи устройств
@@ -246,7 +258,7 @@ class GroupStore(PurgeableStore):
 
     purge_name = "DALI-группы"
 
-    async def purge_device(self, devsn: str) -> int:
+    async def purge_identity(self, identity: str) -> int:
         """Группа не привязана к устройству: её состав — адреса, а не серийники.
         Убирается вместе со шлюзом или явным удалением группы."""
         return 0
@@ -307,7 +319,7 @@ class CrossGroupStore(PurgeableStore):
 
     purge_name = "кросс-шлюзовые группы"
 
-    async def purge_device(self, devsn: str) -> int:
+    async def purge_identity(self, identity: str) -> int:
         """Состав кросс-группы — адреса ламп, серийников там нет."""
         return 0
 
@@ -376,11 +388,11 @@ class DeviceStore(PurgeableStore):
 
     purge_name = "устройства шины"
 
-    async def purge_device(self, devsn: str) -> int:
+    async def purge_identity(self, identity: str) -> int:
         """Снять записи с этим серийником на ВСЕХ шлюзах (устройство могло переехать)."""
         gone = 0
         for gw, devs in list(self._data.items()):
-            keep = {k: v for k, v in (devs or {}).items() if v.get("devSn") != devsn}
+            keep = {k: v for k, v in (devs or {}).items() if v.get("devSn") != identity}
             if len(keep) != len(devs or {}):
                 gone += len(devs) - len(keep)
                 self._data[gw] = keep
@@ -498,12 +510,12 @@ class RotaryStore(PurgeableStore):
 
     purge_name = "привязки поворотной панели"
 
-    async def purge_device(self, devsn: str) -> int:
-        return await self._purge_keys([devsn] if devsn in self._data else [])
+    async def purge_identity(self, identity: str) -> int:
+        return await self._purge_keys([identity] if identity in self._data else [])
 
     async def purge_gateway(self, gw_sn: str) -> int:
         """Ключ — только devSn панели, шлюза в нём нет → чистить по шлюзу нечего.
-        Записи снимаются вместе с устройствами (`purge_device` на каждое)."""
+        Записи снимаются вместе с устройствами (`purge_identity` на каждое)."""
         return 0
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -538,10 +550,10 @@ class SensorPrefStore(PurgeableStore):
 
     purge_name = "предпочтения активности датчиков"
 
-    async def purge_device(self, devsn: str) -> int:
+    async def purge_identity(self, identity: str) -> int:
         """Ключ — `devSn:devType` (движение и люкс — две записи одного устройства)."""
         return await self._purge_keys([k for k in self._data
-                                       if str(k).startswith(f"{devsn}:")])
+                                       if str(k).startswith(f"{identity}:")])
 
     async def purge_gateway(self, gw_sn: str) -> int:
         """Легаси адресный фолбэк ключа (до v1.2.51) начинался с серийника ШЛЮЗА."""
@@ -585,10 +597,10 @@ class SensorObjStore(PurgeableStore):
 
     purge_name = "конфигурации функций датчиков"
 
-    async def purge_device(self, devsn: str) -> int:
+    async def purge_identity(self, identity: str) -> int:
         """Ключ — `devSn:devType:dpid` → снимаем все функции этого устройства."""
         return await self._purge_keys([k for k in self._data
-                                       if str(k).startswith(f"{devsn}:")])
+                                       if str(k).startswith(f"{identity}:")])
 
     async def purge_gateway(self, gw_sn: str) -> int:
         """Легаси-фолбэк писался как `gwSn:devType:dpid` (до v1.2.51)."""
@@ -631,7 +643,7 @@ class PanelActStore(PurgeableStore):
 
     purge_name = "действия привязок кнопок"
 
-    async def purge_device(self, devsn: str) -> int:
+    async def purge_identity(self, identity: str) -> int:
         """Ключ — `gw:keyNo:dpid:цель(dt:ch:addr)`: ни панели, ни цели по серийнику там нет
         (обе адресуются адресом). Снимается вместе со шлюзом."""
         return 0
@@ -698,7 +710,7 @@ class GroupParamStore(PurgeableStore):
 
     purge_name = "параметры групп"
 
-    async def purge_device(self, devsn: str) -> int:
+    async def purge_identity(self, identity: str) -> int:
         """Ключ — `gw:ch:groupId`, устройства в нём нет."""
         return 0
 
@@ -746,8 +758,73 @@ class GroupParamStore(PurgeableStore):
         return len(gone)
 
 
+class IdentityModeStore(PurgeableStore):
+    """Чем ключуется идентичность на ЭТОЙ установке: `devsn` (штатно) или `addr`.
+
+    Почему отдельный файл, а не опция в ConfigEntry: записей у нас по одной НА ШЛЮЗ, а режим —
+    один на объект (docs/ADDRESS_IDENTITY.md §11.1). Флаг в каждой записи пришлось бы
+    синхронизировать, и рано или поздно добавленный позже шлюз получил бы не тот режим — это
+    источник расхождения, а не удобство.
+
+    ⚠ Хранилище НЕ участвует в чистках (не `PurgeableStore`): «Стереть данные» и удаление шлюза
+    обязаны оставлять режим как есть. Режим меняет только человек явным действием.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._store = Store(hass, 1, _MODE_STORE_KEY)
+        self._mode: str = DEFAULT_MODE
+
+    async def async_load(self) -> None:
+        data = await self._store.async_load() or {}
+        raw = data.get("mode")
+        self._mode = normalize_mode(raw)
+        if raw is not None and self._mode != raw:
+            # молча подменять режим нельзя: человек должен узнать, что в файле мусор
+            _LOGGER.error("режим идентичности «%s» неизвестен — работаю в «%s»", raw, self._mode)
+        if self._mode != DEFAULT_MODE:
+            _LOGGER.warning("РЕЖИМ ИДЕНТИЧНОСТИ: %s (ключ — координата на шине, не серийник)",
+                            self._mode)
+
+    purge_name = "режим идентичности"
+
+    async def purge_identity(self, identity: str) -> int:
+        """НЕ чистим — и это решение, а не забывчивость (см. `PurgeableStore`).
+
+        Режим — настройка ВСЕЙ установки, а не данные устройства. Если бы «Забыть» его трогала,
+        одно снятое устройство молча вернуло бы объект в штатный режим, и половина сущностей
+        переехала бы на другие ключи. Режим меняет только человек явным действием."""
+        return 0
+
+    async def purge_gateway(self, gw_sn: str) -> int:
+        """НЕ чистим по той же причине: «Стереть данные» и удаление шлюза обязаны оставлять
+        режим как есть. Иначе откат «стёр данные → переключил» превращался бы в рулетку."""
+        return 0
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    async def async_set(self, mode: str) -> str:
+        """Сменить режим. Возвращает установленный. Гейты (пусто ли на объекте) — НЕ здесь:
+        это хранилище, оно не решает, можно ли; решает вызывающий, и он же спрашивает человека."""
+        self._mode = normalize_mode(mode)
+        await self._store.async_save({"mode": self._mode})
+        _LOGGER.warning("режим идентичности переключён на «%s»", self._mode)
+        return self._mode
+
+
 def get_store(hass: HomeAssistant) -> ParamStore | None:
     return hass.data.get(_HASS_KEY)
+
+
+def get_identity_mode_store(hass: HomeAssistant) -> "IdentityModeStore | None":
+    return hass.data.get(_MODE_HASS_KEY)
+
+
+def get_identity_mode(hass: HomeAssistant) -> str:
+    """Режим идентичности установки. До загрузки хранилища — штатный (ничего не меняем)."""
+    st = hass.data.get(_MODE_HASS_KEY)
+    return st.mode if st else DEFAULT_MODE
 
 
 def get_panel_act_store(hass: HomeAssistant) -> "PanelActStore | None":
@@ -790,6 +867,10 @@ async def async_setup_store(hass: HomeAssistant) -> None:
     pstore = ParamStore(hass)
     await pstore.async_load()
     hass.data[_HASS_KEY] = pstore
+    # режим идентичности читаем ПЕРВЫМ: от него зависит, чем ключуется всё остальное
+    mstore = IdentityModeStore(hass)
+    await mstore.async_load()
+    hass.data[_MODE_HASS_KEY] = mstore
     nstore = NameStore(hass)
     await nstore.async_load()
     hass.data[_NAME_HASS_KEY] = nstore
@@ -825,7 +906,7 @@ async def async_setup_store(hass: HomeAssistant) -> None:
     if pstore.has_legacy_keys():
         await pstore.async_migrate_to_devsn(dstore.devsn_addr_map())
     # РЕЕСТР для единой чистки (S5): все сторы, кроме сателлитных (энергия/здоровье — свои)
-    hass.data[_ALL_STORES_HASS_KEY] = [pstore, nstore, gstore, xgstore, dstore, rstore,
+    hass.data[_ALL_STORES_HASS_KEY] = [mstore, pstore, nstore, gstore, xgstore, dstore, rstore,
                                        pastore, gpstore, spstore, sostore]
 
 
@@ -849,7 +930,7 @@ def get_all_stores(hass: HomeAssistant) -> list[PurgeableStore]:
     return stores
 
 
-async def purge_device_everywhere(hass: HomeAssistant, devsn: str) -> dict[str, int]:
+async def purge_identity_everywhere(hass: HomeAssistant, identity: str) -> dict[str, int]:
     """Убрать ВСЁ, что хранится про устройство, во всех сторах. Отчёт: имя стора → сколько.
 
     ⚠ Реестры HA (сущности/устройства) этим не затрагиваются — они живут по своим законам
@@ -857,9 +938,9 @@ async def purge_device_everywhere(hass: HomeAssistant, devsn: str) -> dict[str, 
     report: dict[str, int] = {}
     for store in get_all_stores(hass):
         try:
-            n = await store.purge_device(devsn)
+            n = await store.purge_identity(devsn)
         except Exception as err:  # noqa: BLE001 — один стор не должен рушить всю чистку
-            _LOGGER.error("purge_device(%s) в %s: %s", devsn, store.purge_name, err)
+            _LOGGER.error("purge_identity(%s) в %s: %s", devsn, store.purge_name, err)
             continue
         if n:
             report[store.purge_name] = n

@@ -38,7 +38,6 @@ from .store import (
     get_rotary_store,
     get_store,
     group_name_key,
-    name_key,
     param_key,
     purge_identity_everywhere,
     purge_gateway_everywhere,
@@ -150,10 +149,10 @@ def _dev(d: dict, hass: HomeAssistant = None, gw_sn: str = "", hub=None) -> dict
     }
     if hass is not None:
         out["entities"] = _entities(hass, gw_sn, d, hub)
-        ns = get_name_store(hass)
-        if ns:
-            custom = ns.get(name_key(gw_sn, d.get("devType"), d.get("channel"),
-                                     d.get("address"), d.get("devSn")))
+        # имя читает ХАБ — он один знает, чем ключуется идентичность (v1.2.72).
+        # Без хаба (редкий путь) имени не показываем: угадывать ключ на месте нельзя.
+        if hub is not None:
+            custom = hub.custom_name(d)
             out["named"] = bool(custom)   # для фильтра «только неназванные» (пусконаладка)
             if custom:
                 # датчики: показываем с префиксом по типу (ms_/il_ + тело), без русского;
@@ -1159,7 +1158,7 @@ async def ws_forget_device(hass, connection, msg):
                      devsn, len(keys), ", ".join(keys))
     if wipe_ok:
         ns = get_name_store(hass)
-        if ns:                                    # 1) наше имя (name_key(...devsn) == devsn)
+        if ns:                                    # 1) наше имя (ключ идентичности == devSn в штатном режиме)
             await ns.async_set(devsn, "")
         for k in keys:                            # 2) сущности ОБЕИХ ролей → шаблонные id/подпись
             d = hub.devices.get(k)
@@ -1589,7 +1588,7 @@ async def ws_rename(hass, connection, msg):
     #    HA (сущность переименована выше) и наш стор не засоряет: адресный ключ пережил бы
     #    само устройство и всплыл на его преемнике по адресу (так вернулось `l_2_2_2`).
     ns = get_name_store(hass)
-    nkey = name_key(msg["gw_sn"], msg["devType"], msg["channel"], msg["address"], d["devSn"])
+    nkey = hub.name_key_for(d) if hub else None
     if ns and nkey:
         await ns.async_set(nkey, name)
     elif ns:

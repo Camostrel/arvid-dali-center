@@ -24,7 +24,6 @@ from .coordinator import (
     dev_state_key,
 )
 from .naming import device_name
-from .store import get_name_store, name_key
 from .transport.decode import devtype_name
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,12 +37,10 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     hub: DaliGatewayHub = hass.data[DOMAIN][entry.entry_id]
-    ns = get_name_store(hass)
     entities: list[DaliPanelEvent] = []
     for dev in hub.devices_snapshot():
         if str(dev.get("devType")).startswith("03"):
-            custom = ns.get(name_key(hub.gw_sn, dev.get("devType"), dev.get("channel"),
-                                     dev.get("address"), dev.get("devSn"))) if ns else ""
+            custom = hub.custom_name(dev)
             entities.append(DaliPanelEvent(hub, dev, custom))
     _LOGGER.info("%s [%s]: создано панелей %d", DOMAIN, hub.gw_sn, len(entities))
     async_add_entities(entities)
@@ -52,8 +49,7 @@ async def async_setup_entry(
     def _factory(dev):
         if not str(dev.get("devType")).startswith("03"):
             return None
-        custom = ns.get(name_key(hub.gw_sn, dev.get("devType"), dev.get("channel"),
-                                 dev.get("address"), dev.get("devSn"))) if ns else ""
+        custom = hub.custom_name(dev)
         return DaliPanelEvent(hub, dev, custom)
     hub.register_platform("event", async_add_entities, _factory)
 
@@ -76,7 +72,7 @@ class DaliPanelEvent(DaliBusEntity, EventEntity):
         # типы событий зависят от числа клавиш конкретной панели (0302 → 2, 0308 → 8)
         self._attr_event_types = panel_ops.key_event_types(self._devtype)
         devsn = dev.get("devSn") or ""
-        uid_base = devsn or f"{hub.gw_sn}:{self._channel}:{self._address}"
+        uid_base = hub.identity(dev)         # единый ключ идентичности (см. хаб)
         self._attr_unique_id = f"{uid_base}_event"
         # ИМЕНОВАННАЯ → подпись = custom; БЕЗЫМЯННАЯ → подпись НЕ задаём (v1.2.7), HA выведет её
         # из entity_id (форс coordinator: keypanel_<кнопок>_<addr>_<sn5> / rotary_…).

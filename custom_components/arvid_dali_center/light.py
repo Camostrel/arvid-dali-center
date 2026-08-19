@@ -39,7 +39,6 @@ from .coordinator import (
     dev_state_key,
 )
 from .naming import device_name
-from .store import get_name_store, name_key
 from .transport.decode import devtype_name
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,12 +68,10 @@ async def async_setup_entry(
 ) -> None:
     """Создать сущности-лампы по кешу устройств шлюза этой записи."""
     hub: DaliGatewayHub = hass.data[DOMAIN][entry.entry_id]
-    ns = get_name_store(hass)
     entities: list[LightEntity] = []
     for dev in hub.devices_snapshot():
         if str(dev.get("devType")) in LIGHT_TYPES:
-            custom = ns.get(name_key(hub.gw_sn, dev.get("devType"), dev.get("channel"),
-                                     dev.get("address"), dev.get("devSn"))) if ns else ""
+            custom = hub.custom_name(dev)
             entities.append(DaliLight(hub, hub.gw_sn, dev, custom))
     for g in hub.groups:
         entities.append(DaliGroupLight(hub, g))   # имя группы — с контроллера
@@ -87,8 +84,7 @@ async def async_setup_entry(
 
     # динамика ламп: factory + adder в хабе → reconcile создаёт новые лампы без reload
     def _factory(dev):
-        custom = ns.get(name_key(hub.gw_sn, dev.get("devType"), dev.get("channel"),
-                                 dev.get("address"), dev.get("devSn"))) if ns else ""
+        custom = hub.custom_name(dev)
         return DaliLight(hub, hub.gw_sn, dev, custom)
     hub.register_platform("light", async_add_entities, _factory)
 
@@ -124,7 +120,9 @@ class DaliLight(DaliBusEntity, LightEntity, RestoreEntity):
         self._key = dev_state_key(self._devtype, self._channel, self._address)
         self._avail_key = self._key   # реальный online/offline из onlineStatus
 
-        uid = dev.get("devSn") or f"{gw_sn}:{self._key}"
+        # ключ идентичности — ЕДИНЫМ методом хаба (см. `DaliGatewayHub.identity`):
+        # у ламп исторический фолбэк включает devType, поэтому light=True
+        uid = hub.identity(dev, light=True)
         self._attr_unique_id = uid
 
         if self._devtype in CCT_TYPES:

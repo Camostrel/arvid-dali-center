@@ -30,7 +30,8 @@ from .const import (
 from .eventlog import get_eventlog
 # naming — чистый модуль (ни HA, ни coordinator не тянет) → импорт на уровне модуля безопасен,
 # цикла нет. Остальные функции naming импортируются отложенно (исторически), см. _desired_entity_id.
-from .identity import LIGHT_TYPES, address_space
+from .identity import (LIGHT_TYPES, MODE_ADDR, address_space, function_key,
+                       identity_key, is_addr_key)
 from .naming import is_auto_suffix
 from .transport.core import GatewaySession, dev_key
 from .transport.decode import is_valid_devsn
@@ -658,15 +659,21 @@ class DaliGatewayHub:
                     "setSensorOnOff", "setSensorOnOffRes", value=True,
                     devType=dev["devType"], channel=dev["channel"], address=dev["address"])
 
-    @staticmethod
-    def _sensor_pref_key(dev: dict, addr_key: str) -> str:
-        """Ключ ПРЕДПОЧТЕНИЯ активности датчика — по ИДЕНТИЧНОСТИ (`devSn:devType`), Fix L.
+    def _sensor_pref_key(self, dev: dict, addr_key: str) -> str:
+        """Ключ ПРЕДПОЧТЕНИЯ активности датчика — по ИДЕНТИЧНОСТИ + ФУНКЦИИ, Fix L.
 
         Раньше ключом был АДРЕС → при перенумерации предпочтение протухало: выключенный вручную
         датчик тихо включался обратно, а его «выключено» наследовало ЧУЖОЕ устройство, которому
-        достался этот адрес. Фолбэк на адресный ключ — только если devSn невалиден."""
-        sn = dev.get("devSn")
-        return f"{sn}:{dev.get('devType')}" if is_valid_devsn(sn) else addr_key
+        достался этот адрес. Фолбэк на адресный ключ — только если идентичности нет.
+
+        ⚠ `devType` в ключе ОБЯЗАТЕЛЕН и в обоих режимах (Н2 плана): движение `0201` и
+        освещённость `0202` — одна железка, у них общий серийник и общая координата. Потеряем
+        функцию — «выключил движение» погасит и освещённость, причём молча."""
+        ident = self.identity(dev)
+        fkey = function_key(ident, dev.get("devType"))
+        if is_addr_key(ident):
+            return fkey or addr_key
+        return fkey if is_valid_devsn(ident) else addr_key
 
     def sensor_pref_key(self, dev: dict, addr_key: str) -> str:
         """Публичная обёртка `_sensor_pref_key` (зовёт switch-сущность)."""
@@ -1054,14 +1061,70 @@ class DaliGatewayHub:
         if entity is None or self._bus_entities.get(unique_id) is entity:
             self._bus_entities.pop(unique_id, None)
 
+    def identity(self, dev: dict, *, light: bool = False) -> str:
+        """КЛЮЧ ИДЕНТИЧНОСТИ устройства: им ключуются `unique_id`, карточка устройства HA и
+        device-level хранилища (имя, параметры, энергия).
+
+        Единственная точка, где решается «чем опознаём железку». Раньше эта формула была
+        РАЗМНОЖЕНА по пяти местам (четыре платформы + `_roles_for_dev`), причём в двух видах —
+        у ламп фолбэк с `devType`, у остальных без. Любое расхождение между ними означало бы,
+        что `reconcile` не находит сущность по своему же ключу.
+
+        Режимы — `identity.py`:
+        * `devsn` (штатный) — серийник; при его отсутствии ИСТОРИЧЕСКИЙ адресный фолбэк, ровно
+          в прежней форме (менять её нельзя: сменится `unique_id` → HA заведёт новые сущности,
+          а старые уедут в корзину и будут воскресать оттуда — закон 1);
+        * `addr` — координата на шине, серийник не участвует (docs/ADDRESS_IDENTITY.md).
+        """
+        from .store import get_identity_mode
+        mode = get_identity_mode(self.hass)
+        if mode == MODE_ADDR:
+            key = identity_key(mode, self.gw_sn, dev)
+            if key:
+                return key
+            # Координаты нет — опознать устройство нечем. Молча подставлять серийник нельзя:
+            # в адресном режиме он как раз и признан ненадёжным. Говорим вслух и идём в фолбэк.
+            _LOGGER.warning("адресный режим: у устройства нет координаты (%s), ключ по старому "
+                            "правилу — разберите вручную: %r", self.gw_sn, dev)
+        sn = dev.get("devSn")
+        if sn:
+            return sn
+        ch, addr = dev.get("channel"), dev.get("address")
+        if light:
+            return f"{self.gw_sn}:{dev_state_key(str(dev.get('devType')), ch, addr)}"
+        return f"{self.gw_sn}:{ch}:{addr}"
+
+    def name_key_for(self, dev: dict) -> str | None:
+        """Ключ ИМЕНИ устройства. `None` = имя хранить нечем (вызывающий не пишет и не читает).
+
+        Штатный режим: только валидный серийник — фолбэков под безсерийные устройства не
+        городим (решение 2026-08-07, v1.2.51: адресные ключи имён однажды уже дали воскресшее
+        `l_2_2_2` на новом светильнике). Адресный режим: координата годится всегда, она и есть
+        идентичность.
+        """
+        key = self.identity(dev)
+        if is_addr_key(key):
+            return key
+        return key if is_valid_devsn(key) else None
+
+    def custom_name(self, dev: dict) -> str:
+        """Пользовательское имя устройства («продакшен» `l_/ms_/il_/kp_`) или «».
+
+        Одна точка чтения: раньше `ns.get(name_key(...))` был выписан в ДЕСЯТИ местах, и каждое
+        решало про ключ самостоятельно."""
+        from .store import get_name_store
+        ns = get_name_store(self.hass)
+        k = self.name_key_for(dev)
+        return (ns.get(k) if (ns and k) else "") or ""
+
     def _roles_for_dev(self, dev: dict) -> list[tuple]:
         """Какие сущности ДОЛЖНЫ существовать для устройства: [(role, platform, unique_id)].
-        unique_id строится по devSn (стабилен) — совпадает с тем, что задают сами сущности."""
-        t = str(dev.get("devType")); ch = dev.get("channel"); addr = dev.get("address")
-        sn = dev.get("devSn")
-        base = sn or f"{self.gw_sn}:{ch}:{addr}"
+        unique_id строится ЕДИНЫМ методом `identity()` — тем же, которым его задают сами
+        сущности (иначе reconcile не нашёл бы их по своему же ключу)."""
+        t = str(dev.get("devType"))
+        base = self.identity(dev)
         if t in _LIGHT_TYPES:
-            return [("light", "light", sn or f"{self.gw_sn}:{t}:{ch}:{addr}")]
+            return [("light", "light", self.identity(dev, light=True))]
         if t == "0201":
             return [("motion", "sensor", f"{base}_motion"),
                     ("active_0201", "switch", f"{base}_active_0201")]
@@ -1187,12 +1250,7 @@ class DaliGatewayHub:
         (v1.2.7: имя УСТРОЙСТВА за адресом больше не следует — оно по devSn; этот гейт остался
         только для entity_id сущностей.)
         """
-        from .store import get_name_store, name_key
-        ns = get_name_store(self.hass)
-        if not ns:
-            return False
-        return bool(ns.get(name_key(self.gw_sn, dev.get("devType"), dev.get("channel"),
-                                    dev.get("address"), dev.get("devSn"))))
+        return bool(self.custom_name(dev))
 
     # v1.2.18 (B4): `live_devsns` / `_live_devsn_set` / `_identity_is_live` УДАЛЕНЫ вместе с веткой
     # отбирания entity_id в `_force_entity_id` — осевшая машинерия эпохи, когда id выводился из
@@ -1216,10 +1274,7 @@ class DaliGatewayHub:
         from homeassistant.util import slugify
 
         from .naming import entity_name
-        from .store import get_name_store, name_key
-        ns = get_name_store(self.hass)
-        custom = ns.get(name_key(self.gw_sn, dev.get("devType"), dev.get("channel"),
-                                 dev.get("address"), dev.get("devSn"))) if ns else ""
+        custom = self.custom_name(dev)
         if custom:
             # отложенный импорт: websocket_api импортирует coordinator (цикл на уровне модуля)
             from .websocket_api import _rename_roles

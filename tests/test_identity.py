@@ -131,6 +131,52 @@ class TestFunctionKey(unittest.TestCase):
         self.assertIsNone(identity.function_key("addr:X:0:02:5", None))
 
 
+class TestIdentityNotDuplicated(unittest.TestCase):
+    """Сторож шага 4: ключ идентичности считается ОДНИМ методом хаба.
+
+    До v1.2.72 формула жила в пяти местах (четыре платформы + `_roles_for_dev`), причём в двух
+    видах: у ламп фолбэк с `devType`, у остальных без. Разъехались бы — `reconcile` перестал бы
+    находить сущности по своему же ключу, и это тот самый класс §F.
+    """
+
+    PLATFORMS = ("light.py", "sensor.py", "switch.py", "event.py")
+
+    def _src(self, name):
+        return (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
+                / "arvid_dali_center" / name).read_text(encoding="utf-8")
+
+    def test_platforms_ask_the_hub(self):
+        for name in self.PLATFORMS:
+            self.assertIn("hub.identity(dev", self._src(name),
+                          f"{name}: unique_id обязан браться из hub.identity()")
+
+    def test_platforms_do_not_rebuild_the_key(self):
+        """Ни одна платформа не собирает базу ключа сама (`devSn or f"{gw}:..."`)."""
+        for name in self.PLATFORMS:
+            for line in self._src(name).splitlines():
+                if line.lstrip().startswith("#"):
+                    continue
+                bad = ('uid_base = ' in line or 'uid = ' in line) and 'devSn' in line
+                self.assertFalse(bad, f"{name}: база ключа собирается на месте — {line.strip()}")
+
+    def test_name_is_read_through_the_hub(self):
+        """Шаг 5 (NameStore): имя читается ОДНОЙ точкой — `hub.custom_name(dev)`.
+
+        Было десять мест с `ns.get(name_key(...))`, каждое решало про ключ самостоятельно.
+        В адресном режиме такие места молча читали бы имя не по тому ключу."""
+        for name in self.PLATFORMS:
+            self.assertNotIn("name_key(", self._src(name),
+                             f"{name}: ключ имени собирается на месте")
+        coord = self._src("coordinator.py")
+        self.assertEqual(coord.count("def custom_name(self, dev"), 1)
+        self.assertEqual(coord.count("def name_key_for(self, dev"), 1)
+
+    def test_hub_has_single_identity_method(self):
+        src = self._src("coordinator.py")
+        self.assertEqual(src.count("def identity(self, dev"), 1)
+        self.assertIn("base = self.identity(dev)", src)
+
+
 class TestSingleSourceOfLightTypes(unittest.TestCase):
     """Сторож: список типов ламп живёт в ОДНОМ месте. Вторая копия неизбежно разойдётся —
     это ровно класс §F («фикс доехал до одного вызывающего из двух»)."""

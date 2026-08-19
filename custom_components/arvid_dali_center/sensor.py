@@ -31,7 +31,6 @@ from .coordinator import (
     dev_state_key,
 )
 from .naming import device_name, sensor_body, sensor_name
-from .store import get_name_store, name_key
 from .transport.decode import MOTION
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,14 +43,12 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     hub: DaliGatewayHub = hass.data[DOMAIN][entry.entry_id]
-    ns = get_name_store(hass)
     entities: list[SensorEntity] = []
     for dev in hub.devices_snapshot():
         t = str(dev.get("devType"))
         if t not in (MOTION_TYPE, LUX_TYPE):
             continue
-        custom = ns.get(name_key(hub.gw_sn, t, dev.get("channel"),
-                                 dev.get("address"), dev.get("devSn"))) if ns else ""
+        custom = hub.custom_name(dev)
         if t == MOTION_TYPE:
             entities.append(DaliMotionSensor(hub, dev, custom))
         else:
@@ -62,8 +59,7 @@ async def async_setup_entry(
     # динамика датчиков: factory + adder в хабе → reconcile создаёт новые без reload
     def _factory(dev):
         t = str(dev.get("devType"))
-        custom = ns.get(name_key(hub.gw_sn, t, dev.get("channel"),
-                                 dev.get("address"), dev.get("devSn"))) if ns else ""
+        custom = hub.custom_name(dev)
         if t == MOTION_TYPE:
             return DaliMotionSensor(hub, dev, custom)
         if t == LUX_TYPE:
@@ -89,7 +85,7 @@ class _DaliSensorBase(DaliBusEntity, SensorEntity):
         self._avail_key = self._key   # реальный online/offline из onlineStatus
         # devSn общий у движения/люкса → одна карточка-устройство
         self._devsn = dev.get("devSn") or ""
-        self._uid_base = self._devsn or f"{hub.gw_sn}:{self._channel}:{self._address}"
+        self._uid_base = hub.identity(dev)   # единый ключ идентичности (см. хаб)
         # имя УСТРОЙСТВА — по devSn (стабильно навсегда); custom (продакшен) — как есть
         dev_name = custom or device_name(self._devtype, self._devsn, self._address)
         self._attr_device_info = DeviceInfo(

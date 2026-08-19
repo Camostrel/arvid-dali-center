@@ -3111,4 +3111,4 @@ option{background:#eaf3ff;color:#0F172A}
 customElements.define('arvid-dali-panel', ArvidDaliPanel);
 window.customCards = window.customCards || [];
 window.customCards.push({ type: 'arvid-dali-panel', name: 'ARVID DALI Panel', description: 'Управление интеграцией ARVID DALI Center.' });
-console.info('%c ARVID-DALI-PANEL %c v1.2.72 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');
+console.info('%c ARVID-DALI-PANEL %c v1.2.73 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');

@@ -12,7 +12,7 @@ import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .identity import DEFAULT_MODE, normalize_mode
+from .identity import DEFAULT_MODE, is_addr_key, normalize_mode
 
 from .transport.decode import is_valid_devsn
 
@@ -615,13 +615,21 @@ class SensorObjStore(PurgeableStore):
         self._data = await self._store.async_load() or {}
 
     @staticmethod
-    def _k(gw_sn: str, devsn: str, dev_type: str, dpid) -> str | None:
-        """Ключ — ТОЛЬКО идентичность `devSn:devType:dpid` (v1.2.51).
+    def _k(gw_sn: str, identity: str, dev_type: str, dpid) -> str | None:
+        """Ключ — ИДЕНТИЧНОСТЬ + ФУНКЦИЯ + dpid (v1.2.51, идентичность обобщена в v1.2.73).
 
         Был фолбэк на серийник ШЛЮЗА: конфигурации разных датчиков одного контроллера
-        схлопывались в одну запись, а чистка по устройству их не находила. Без серийника
-        просто не храним — «план Б» для такого датчика недоступен, и это честнее подмены."""
-        return f"{devsn}:{dev_type}:{dpid}" if is_valid_devsn(devsn) else None
+        схлопывались в одну запись, а чистка по устройству их не находила. Без ключа
+        идентичности просто не храним — «план Б» для такого датчика недоступен, и это честнее
+        подмены.
+
+        ⚠ `dev_type` в ключе обязателен и в адресном режиме: движение `0201` и освещённость
+        `0202` делят координату, но конфигурации функций у них РАЗНЫЕ (Н2 плана)."""
+        if not identity:
+            return None
+        if not is_addr_key(identity) and not is_valid_devsn(identity):
+            return None
+        return f"{identity}:{dev_type}:{dpid}"
 
     def get(self, gw_sn: str, devsn: str, dev_type: str, dpid) -> dict | None:
         k = self._k(gw_sn, devsn, dev_type, dpid)

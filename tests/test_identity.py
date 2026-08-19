@@ -177,6 +177,39 @@ class TestIdentityNotDuplicated(unittest.TestCase):
         self.assertIn("base = self.identity(dev)", src)
 
 
+class TestStoresKeyedThroughHub(unittest.TestCase):
+    """Сторож шага 5: device-level хранилища берут ключ у хаба, а не собирают из `devSn`.
+
+    Опасность именно тихая: в адресном режиме такое место продолжит работать, но будет писать
+    и читать НЕ ПО ТОМУ ключу — данные «пропадут», хотя ошибок в логе не будет.
+    """
+
+    def _src(self, rel):
+        return (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
+                / "arvid_dali_center" / rel).read_text(encoding="utf-8")
+
+    def test_param_store_key_via_hub(self):
+        self.assertIn("hub.name_key_for(rec)", self._src("websocket_api.py"))
+
+    def test_rotary_binding_via_hub(self):
+        src = self._src("websocket_api.py")
+        self.assertNotIn('devsn = dev.get("devSn") if dev else None', src,
+                         "привязка поворота всё ещё ключуется серийником напрямую")
+
+    def test_sensor_obj_store_keeps_function_in_key(self):
+        """Н2: конфигурация функции датчика различает 0201 и 0202 в ОБОИХ режимах."""
+        self.assertIn('f"{identity}:{dev_type}:{dpid}"', self._src("store.py"))
+
+    def test_energy_resolves_identity_not_serial(self):
+        self.assertIn("hub.name_key_for(rec)", self._src("energy/integrator.py"))
+
+    def test_health_finds_entities_by_identity(self):
+        src = self._src("health/evaluator.py")
+        self.assertNotIn('ereg.async_get_entity_id(platform, DOMAIN, f"{devsn}{sfx}")', src,
+                         "здоровье собирает unique_id из серийника — в адресном режиме оно "
+                         "просто перестанет находить сущности, и это будет ТИХО")
+
+
 class TestSingleSourceOfLightTypes(unittest.TestCase):
     """Сторож: список типов ламп живёт в ОДНОМ месте. Вторая копия неизбежно разойдётся —
     это ровно класс §F («фикс доехал до одного вызывающего из двух»)."""

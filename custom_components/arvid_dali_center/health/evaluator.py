@@ -109,7 +109,7 @@ class HealthEvaluator:
         self._sweep_timer = None       # страховочный редкий полный посев
         # индексы (строятся посевом, обновляются при появлении/переименовании сущностей)
         self._by_eid: dict[str, dict] = {}    # entity_id → ctx устройства
-        self._by_key: dict[str, dict] = {}    # key (gw:devSn:devType) → ctx
+        self._by_key: dict[str, dict] = {}    # key (gw:<идентичность>:devType) → ctx
         self._deadlines: dict[str, float] = {}   # key → utc-timestamp, когда станет ошибкой
         self._generated_at: str | None = None    # когда снимок последний раз пересчитывался
 
@@ -196,11 +196,20 @@ class HealthEvaluator:
                 continue
             for dev in hub.devices_snapshot():
                 dtv = str(dev.get("devType", ""))
-                devsn = dev.get("devSn")
+                # v1.2.73: сущности ищем по КЛЮЧУ ИДЕНТИЧНОСТИ, а не по серийнику напрямую.
+                # В штатном режиме это тот же devSn, в адресном — координата; собери мы
+                # `unique_id` из devSn вручную, здоровье просто перестало бы находить сущности
+                # (тихо: список ошибок пуст — «всё хорошо»).
+                # `name_key_for` (а не `identity`) — он воспроизводит ПРЕЖНИЙ гейт: в штатном
+                # режиме устройство без валидного серийника здоровью не показывалось.
+                devsn = (hub.name_key_for(dev) if hasattr(hub, "name_key_for")
+                         else dev.get("devSn"))
                 if not devsn:
                     continue
                 for platform, sfx, role in _roles(dtv):
-                    eid = ereg.async_get_entity_id(platform, DOMAIN, f"{devsn}{sfx}")
+                    uid = (hub.identity(dev, light=True)
+                           if (platform == "light" and hasattr(hub, "identity")) else f"{devsn}{sfx}")
+                    eid = ereg.async_get_entity_id(platform, DOMAIN, uid)
                     if not eid:
                         continue            # сущности ещё нет → появится, поймаем реестром
                     ctx = {

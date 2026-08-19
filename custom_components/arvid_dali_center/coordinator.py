@@ -2220,7 +2220,10 @@ class DaliGatewayHub:
         from .store import get_rotary_store
         rs = get_rotary_store(self.hass)
         dev = self.devices.get(key)
-        devsn = dev.get("devSn") if dev else None
+        # ключ привязки поворотной ручки — ИДЕНТИЧНОСТЬ устройства (v1.2.73): в штатном режиме
+        # это devSn как раньше, в адресном — координата. Локальное имя `devsn` сохранено, чтобы
+        # не переписывать рантайм-словарь `_rotary_rt` и остальную механику коалесинга.
+        devsn = self.name_key_for(dev) if dev else None
         binding = rs.get(devsn) if (rs and devsn) else None
         if not binding:
             return

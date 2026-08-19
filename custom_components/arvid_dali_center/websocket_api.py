@@ -63,15 +63,17 @@ def _find_hub(hass: HomeAssistant, gw_sn: str):
 
 
 def _param_store_key(hub, gw_sn: str, dev_type, channel, address) -> str | None:
-    """Ключ ParamStore = `devSn` устройства. Без серийника — `None`, и параметры НЕ храним.
+    """Ключ ParamStore = КЛЮЧ ИДЕНТИЧНОСТИ устройства. `None` → параметры НЕ храним.
 
     v1.2.51: адресный фолбэк убран (решение пользователя 2026-08-07). Он казался безобидным,
-    но именно такие ключи «Стереть данные» не видело — операция ходит по серийникам, — и
+    но именно такие ключи «Стереть данные» не видело — операция ходит по идентичностям, — и
     данные всплывали на другом устройстве, занявшем адрес. Команда на шину уходит в любом
-    случае: не сохраняем только НАШУ запись о ней."""
+    случае: не сохраняем только НАШУ запись о ней.
+
+    v1.2.73: ключ спрашиваем у хаба (`name_key_for` — та же логика «есть ли чем ключевать»),
+    чтобы в адресном режиме параметры ложились на координату, а не терялись у безсерийных."""
     rec = hub.devices.get(dev_state_key(str(dev_type), channel, address)) if hub else None
-    sn = rec.get("devSn") if rec else None
-    return sn if is_valid_devsn(sn) else None
+    return hub.name_key_for(rec) if (hub and rec) else None
 
 
 async def _force_group_entity_id(hass: HomeAssistant, gw_sn: str, channel, group_id,
@@ -1393,9 +1395,13 @@ async def ws_set_rotary_binding(hass, connection, msg):
         return
     key = dev_state_key(msg["devType"], msg["channel"], msg["address"])
     dev = hub.devices.get(key)
-    devsn = dev.get("devSn") if dev else None
-    if not is_valid_devsn(devsn):
-        connection.send_error(msg["id"], "no_devsn", "панель без валидного devSn")
+    # v1.2.73: ключ привязки — ИДЕНТИЧНОСТЬ (в штатном режиме devSn, в адресном координата).
+    # Гейт остался: без ключа привязку хранить негде, и лучше честно отказать, чем записать
+    # её туда, откуда её не достанет ни чтение, ни чистка.
+    devsn = hub.name_key_for(dev) if dev else None
+    if not devsn:
+        connection.send_error(msg["id"], "no_devsn",
+                              "панель нечем опознать (нет серийника; в адресном режиме — координаты)")
         return
     rs = get_rotary_store(hass)
     throttle = max(0.7, float(msg["throttle"]))   # пол = время fade-разжигания (~0.7с)
@@ -1430,7 +1436,7 @@ async def ws_set_rotary_binding(hass, connection, msg):
 def ws_get_rotary_binding(hass, connection, msg):
     hub = _find_hub(hass, msg["gw_sn"])
     dev = hub.devices.get(dev_state_key(msg["devType"], msg["channel"], msg["address"])) if hub else None
-    devsn = dev.get("devSn") if dev else None
+    devsn = hub.name_key_for(dev) if (hub and dev) else None
     rs = get_rotary_store(hass)
     connection.send_result(msg["id"], {"binding": rs.get(devsn) if (rs and devsn) else None})
 
@@ -1447,7 +1453,7 @@ def ws_get_rotary_binding(hass, connection, msg):
 async def ws_clear_rotary_binding(hass, connection, msg):
     hub = _find_hub(hass, msg["gw_sn"])
     dev = hub.devices.get(dev_state_key(msg["devType"], msg["channel"], msg["address"])) if hub else None
-    devsn = dev.get("devSn") if dev else None
+    devsn = hub.name_key_for(dev) if (hub and dev) else None   # ключ идентичности (v1.2.73)
     rs = get_rotary_store(hass)
     if rs and devsn:
         await rs.async_remove(devsn)

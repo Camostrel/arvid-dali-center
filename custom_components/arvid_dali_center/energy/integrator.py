@@ -121,11 +121,22 @@ class EnergyIntegrator:
         await self._store.async_flush()
 
     def _resolve_devsn(self, gw_sn: str, key: str) -> str | None:
-        """Ключ сигнала (devType:ch:addr) → devSn через кеш нужного шлюза."""
+        """Ключ сигнала (`devType:ch:addr`) → КЛЮЧ ИДЕНТИЧНОСТИ лампы через кеш её шлюза.
+
+        v1.2.73: спрашиваем идентичность у хаба, а не берём `devSn` из записи. В штатном режиме
+        результат тот же (серийник), в адресном — координата. Имя метода историческое: менять
+        его вместе с ключом значило бы трогать весь сателлит ради косметики.
+
+        ⚠ Учёт ведётся ПО ЭТОМУ ключу, поэтому в адресном режиме замена лампы на том же адресе
+        продолжит чужой счётчик — это осознанная цена модели (Н6 плана: сигнал о смене
+        справочного серийника + ручное обнуление, а не тихий сброс)."""
         for hub in self._hass.data.get(DOMAIN, {}).values():
             if getattr(hub, "gw_sn", None) == gw_sn:
                 rec = getattr(hub, "devices", {}).get(key)
-                return (rec.get("devSn") or None) if rec else None
+                if not rec:
+                    return None
+                ident = hub.name_key_for(rec) if hasattr(hub, "name_key_for") else rec.get("devSn")
+                return ident or None
         return None
 
     @callback

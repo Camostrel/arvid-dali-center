@@ -145,7 +145,7 @@ async def async_set_schedule(hub, dev: dict, dpid: int, windows: list[str]) -> d
     from .store import get_sensor_obj_store
     sos = get_sensor_obj_store(hub.hass)
     if sos and ok:
-        await sos.async_set(hub.gw_sn, dev.get("devSn") or "", dt, dpid,
+        await sos.async_set(hub.gw_sn, hub.name_key_for(dev) or "", dt, dpid,
                             {"luxRange": lux_range, "outputObj": out_obj, "runCondition": run_cond})
     verify = None
     if ok:

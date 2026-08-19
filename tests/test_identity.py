@@ -293,5 +293,35 @@ class TestModeSwitchIsAnOperation(unittest.TestCase):
         self.assertNotIn("switch_mode", coord, "координатор переключает режим сам")
 
 
+class TestOperationsWorkInBothModes(unittest.TestCase):
+    """v1.2.76: операции, которыми разгребают объект, не должны опираться на СЫРОЙ серийник.
+
+    Все найденные здесь отказы были бы ТИХИМИ: «Стереть данные» отчиталась бы про 0 устройств,
+    «Забыть» — про успешную чистку, энергоотчёт пришёл бы пустым. Ни одной ошибки в логе.
+    """
+
+    def _src(self, rel):
+        return (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
+                / "arvid_dali_center" / rel).read_text(encoding="utf-8")
+
+    def test_wipe_finds_devices_in_both_modes(self):
+        src = self._src("websocket_api.py")
+        self.assertIn("_is_device_ident(ident, gw_sn)", src,
+                      "«Стереть данные» отбирает цели гейтом is_valid_devsn")
+        self.assertIn("sn = hub.name_key_for(dev)", src)
+
+    def test_forget_uses_identity(self):
+        src = self._src("websocket_api.py")
+        self.assertIn("devsn = hub.name_key_for(dev)", src)
+        self.assertIn("wipe_ok = bool(devsn)", src)
+
+    def test_energy_report_uses_identity(self):
+        self.assertIn("hub.name_key_for(dev)", self._src("energy/websocket_api.py"))
+
+    def test_device_row_carries_identity(self):
+        """Карточка ищет энергобейдж по ключу идентичности, значит бэкенд обязан его отдать."""
+        self.assertIn('"ident":', self._src("websocket_api.py"))
+
+
 if __name__ == "__main__":
     unittest.main()

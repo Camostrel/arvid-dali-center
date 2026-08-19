@@ -160,9 +160,18 @@ def stitch(map_rows: list[dict], devices: list[dict], gw_sn: str) -> list[dict]:
     by_key = {(r["devtype"], r["address"]): r for r in map_rows if r["gw_sn"] == gw}
     used: set[tuple[str, int]] = set()
     out: list[dict] = []
-    # серийники, у которых на шине есть ДВИЖЕНИЕ: их люкс-половина переименуется вместе с ним
+    # Половинки ДВИЖЕНИЯ на шине: их люкс-пара переименуется вместе с ними и отдельного имени
+    # не требует. Признаков ДВА, и это объединение, а не выбор:
+    #   • общий `devSn` — исторический критерий (v1.2.55);
+    #   • одна КООРДИНАТА (канал+адрес) — работает и там, где серийника нет или он перекошен
+    #     (лампы DALI-1, перекрёст) и где первый критерий развалился бы, показав 190 строк
+    #     мнимых проблем на объекте.
+    # Объединение безопасно: два РАЗНЫХ датчика не могут делить ни серийник, ни адрес, так что
+    # ложных склеек ни один из признаков не даёт.
     motion_sn = {d.get("devSn") for d in devices
                  if _norm_devtype(d.get("devType")) == "0201" and d.get("devSn")}
+    motion_addr = {(d.get("channel"), d.get("address")) for d in devices
+                   if _norm_devtype(d.get("devType")) == "0201"}
 
     # 1) идём от ЖЕЛЕЗА: что реально на шине
     for d in devices:
@@ -173,7 +182,10 @@ def stitch(map_rows: list[dict], devices: list[dict], gw_sn: str) -> list[dict]:
             used.add((devtype, addr))
         current = d.get("name", "") or ""
         warn = []
-        if devtype == "0202" and d.get("devSn") in motion_sn:
+        paired = (d.get("devSn") in motion_sn if d.get("devSn")
+                   else (d.get("channel"), d.get("address")) in motion_addr)
+        if devtype == "0202" and (paired
+                                  or (d.get("channel"), d.get("address")) in motion_addr):
             out.append({
                 "status": ST_PAIRED,
                 "devType": devtype, "channel": d.get("channel"), "address": addr,

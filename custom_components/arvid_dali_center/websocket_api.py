@@ -30,6 +30,7 @@ from homeassistant.util import dt as dt_util, slugify
 
 from .const import DOMAIN
 from .identity import MODES as IDENTITY_MODES
+from .identity import is_addr_key
 from .coordinator import dev_state_key
 from .eventlog import SIGNAL_EVENTLOG, get_eventlog
 from .store import (
@@ -61,6 +62,18 @@ def _find_hub(hass: HomeAssistant, gw_sn: str):
         if hub.gw_sn == gw_sn:
             return hub
     return None
+
+
+def _is_device_ident(ident: str, gw_sn: str) -> bool:
+    """Похож ли идентификатор карточки на ключ НАШЕГО устройства (не шлюза и не группы).
+
+    ⚠ v1.2.76: раньше здесь стоял гейт `is_valid_devsn` — и в адресном режиме он отсекал ВСЁ,
+    потому что ключи там выглядят как `addr:<gw>:<кан>:<класс>:<адрес>`. Отказ был бы тихим:
+    «Стереть данные» отработала бы с отчётом «0 устройств», не тронув ничего.
+    """
+    if not ident or ident == gw_sn or "_group_" in ident:
+        return False
+    return is_addr_key(ident) or is_valid_devsn(ident)
 
 
 def _param_store_key(hub, gw_sn: str, dev_type, channel, address) -> str | None:
@@ -149,6 +162,10 @@ def _dev(d: dict, hass: HomeAssistant = None, gw_sn: str = "", hub=None) -> dict
         # жильца, и «Забыть» снесло бы НЕ ТОГО. Поэтому отдаём реальный `key` кеша.
         "orphan": bool(d.get("orphan")),
         "key": d.get("key", ""),
+        # КЛЮЧ ИДЕНТИЧНОСТИ (v1.2.76): по нему карточка находит энергобейдж и прочие данные,
+        # которые ключуются идентичностью. В штатном режиме равен `devSn`, в адресном —
+        # координате. Поле `devSn` остаётся СПРАВОЧНЫМ: его человек читает глазами.
+        "ident": (hub.identity(d) if hub is not None else d.get("devSn", "")),
     }
     if hass is not None:
         out["entities"] = _entities(hass, gw_sn, d, hub)
@@ -1165,7 +1182,10 @@ async def ws_forget_device(hass, connection, msg):
     if not dev:
         connection.send_error(msg["id"], "not_found", "устройство не найдено")
         return
-    devsn = dev.get("devSn")
+    # v1.2.76: чистим по КЛЮЧУ ИДЕНТИЧНОСТИ, а не по сырому серийнику — в адресном режиме
+    # именно им ключуются имя, параметры и энергия. Взять `devSn` там значило бы «почистить»
+    # то, чего в хранилищах нет: операция отчиталась бы успехом, не убрав ничего.
+    devsn = hub.name_key_for(dev)
     # проверяем ДО сноса (async_forget_device уберёт ключ): если тот же devSn ЖИВ ещё где-то,
     # device-level сторы (имя/параметры/энергия, ключ devSn) ОБЩИЕ — чистить их нельзя, иначе
     # живое устройство потеряет имя. Два случая:
@@ -1177,14 +1197,19 @@ async def ws_forget_device(hass, connection, msg):
     #     имя/энергию устройства, ЖИВОГО на соседнем шлюзе. Персист-знание живо сразу после старта.
     #     Возврат к персисту БЕЗОПАСЕН: источник «размазывания» (exited-кеш) убран в v1.2.14 — теперь
     #     `has_devsn(live_only)` видит только реально известные нам не-зомби устройства (не память шлюза).
-    shared = hub.devsn_shared_with_other_key(key, devsn)
-    elsewhere = hub.devsn_live_on_other_hub(devsn)
+    # ⚠ Три защиты ниже — механизмы ШТАТНОГО режима: они существуют потому, что device-level
+    # сторы ОБЩИЕ по серийнику, и один серийник может носить несколько записей. В адресном
+    # режиме ключ включает шлюз, канал, класс и адрес — совпасть он может только сам с собой,
+    # поэтому защиты не нужны (и врали бы: `devsn_*` ищут по полю `devSn`, а не по ключу).
+    addr_mode = is_addr_key(devsn or "")
+    shared = None if addr_mode else hub.devsn_shared_with_other_key(key, devsn)
+    elsewhere = False if addr_mode else hub.devsn_live_on_other_hub(devsn)
     # 🔴 v1.2.66 — ТРЕТИЙ случай, из «перекрёста devSn» (docs/DEVSN_CROSSWIRE.md): тот же
     # серийник носит ЖИВАЯ запись ДРУГОГО типа (шлюз поменял их местами на одном адресе).
     # Сущности у них разные, а карточка устройства и device-level сторы — ОБЩИЕ по `devSn`,
     # поэтому чистить их нельзя: снесём имя и карточку работающего устройства.
-    cross_live = hub.devsn_live_under_other_type(key, devsn)
-    wipe_ok = is_valid_devsn(devsn) and not shared and not elsewhere and not cross_live
+    cross_live = None if addr_mode else hub.devsn_live_under_other_type(key, devsn)
+    wipe_ok = bool(devsn) and not shared and not elsewhere and not cross_live
     if cross_live:
         _LOGGER.warning("«Забыть» %s (%s): серийник занят ЖИВОЙ записью %s другого типа — "
                         "сущности сношу, имя/параметры/карточку НЕ трогаю (перекрёст devSn)",
@@ -1322,8 +1347,7 @@ async def ws_wipe_gateway_data(hass, connection, msg):
         for gdev in dr.async_entries_for_config_entry(dev_reg, entry_id):
             for dom, ident in gdev.identifiers:
                 # только НАШИ устройства: пропускаем сам шлюз (identifier == gwSn) и группы (…_group_…)
-                if (dom == DOMAIN and ident != gw_sn and "_group_" not in ident
-                        and is_valid_devsn(ident)):
+                if dom == DOMAIN and _is_device_ident(ident, gw_sn):
                     targets.add(ident)
                     break
     # 🔴 v1.2.52: devSn -> СПИСОК записей. Движение (0201) и освещённость (0202) — ОДНО
@@ -1333,8 +1357,8 @@ async def ws_wipe_gateway_data(hass, connection, msg):
     # сохраняло прежнее имя (симптом с объекта 2026-08-07).
     cache_devs: dict[str, list[dict]] = {}        # devSn -> снимки кеша (роли/шаблон для сброса)
     for dev in hub.devices_snapshot():
-        sn = dev.get("devSn")
-        if is_valid_devsn(sn):
+        sn = hub.name_key_for(dev)        # ключ идентичности, а не сырой devSn (v1.2.76)
+        if sn:
             cache_devs.setdefault(sn, []).append(dev)
             targets.add(sn)
 

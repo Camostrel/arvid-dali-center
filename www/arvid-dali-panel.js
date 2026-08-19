@@ -2942,7 +2942,10 @@ class ArvidDaliPanel extends HTMLElement {
   // Теперь: мощность = power_w × кривая(яркость) по состоянию сущности, «всего»/«наработка» —
   // из расчётного накопителя. «Сегодня» убрано: нужен якорь на полночь (отдельная тема — E4).
   _energyBadge(dev) {
-    const e = (dev.devSn && this._state.energy) ? this._state.energy[dev.devSn] : null;
+    // ключ энергоучёта — ИДЕНТИЧНОСТЬ (v1.2.76): в адресном режиме это координата, а не
+    // серийник. `devSn` оставлен фолбэком для старого ядра, которое поля `ident` не отдаёт.
+    const ik = dev.ident || dev.devSn;
+    const e = (ik && this._state.energy) ? this._state.energy[ik] : null;
     if (!e) return `<span class="enbadge stale" title="Нет данных по лампе">—</span>`;
     // аларм перегорания/обрыва — приоритетнее чисел (Правило B)
     const al = e.alarm || [];
@@ -3131,4 +3134,4 @@ option{background:#eaf3ff;color:#0F172A}
 customElements.define('arvid-dali-panel', ArvidDaliPanel);
 window.customCards = window.customCards || [];
 window.customCards.push({ type: 'arvid-dali-panel', name: 'ARVID DALI Panel', description: 'Управление интеграцией ARVID DALI Center.' });
-console.info('%c ARVID-DALI-PANEL %c v1.2.75 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');
+console.info('%c ARVID-DALI-PANEL %c v1.2.76 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');

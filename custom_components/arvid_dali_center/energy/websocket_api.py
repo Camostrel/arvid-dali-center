@@ -101,7 +101,10 @@ def ws_energy_data(hass, connection, msg):
     for dev in hub.devices_snapshot():
         if not str(dev.get("devType", "")).startswith("01"):
             continue
-        devsn = dev.get("devSn")
+        # v1.2.76: ключ учёта — ИДЕНТИЧНОСТЬ лампы (в адресном режиме это координата).
+        # Спросить `devSn` здесь значило бы искать в сторе по ключу, которого там нет:
+        # отчёт вышел бы пустым, причём без единой ошибки.
+        devsn = hub.name_key_for(dev) if hasattr(hub, "name_key_for") else dev.get("devSn")
         if not devsn:
             continue
         rec = store.get(devsn)

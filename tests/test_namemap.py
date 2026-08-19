@@ -172,6 +172,18 @@ class TestStitch(unittest.TestCase):
         self.assertTrue(lux["skip"])
         self.assertEqual(namemap.summary(table)["not_in_map"], 0)
 
+    def test_lux_paired_by_address_when_no_serial(self):
+        """v1.2.76: пара опознаётся и БЕЗ серийника — по общей координате.
+
+        Нужно для адресного режима и для ламп/датчиков DALI-1, где серийника может не быть
+        вовсе: иначе половина датчиков объекта показалась бы строками «нет в карте»."""
+        rows, _ = namemap.parse_map(csv_of(f"{GW};0201;5;ms;2.1.1;ms_2_1_1;;;;;;"))
+        table = namemap.stitch(rows, [dev(devtype="0201", address=5, devsn=""),
+                                      dev(devtype="0202", address=5, devsn="")], GW)
+        lux = next(r for r in table if r["devType"] == "0202")
+        self.assertEqual(lux["status"], namemap.ST_PAIRED)
+        self.assertEqual(namemap.summary(table)["not_in_map"], 0)
+
     def test_lonely_lux_is_still_visible(self):
         """А вот люкс БЕЗ движения (своего devSn нет среди 0201) прятать нельзя — это
         устройство, о котором карта молчит, и человек должен его увидеть."""

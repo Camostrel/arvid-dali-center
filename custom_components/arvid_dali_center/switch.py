@@ -20,7 +20,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import DaliBusEntity, DaliGatewayHub, dev_state_key
-from .naming import device_name, sensor_body, sensor_name
+from .naming import sensor_body, sensor_name
+sensor_body, sensor_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ class DaliSensorActiveSwitch(DaliBusEntity, SwitchEntity):
         # HA выведет из entity_id (форс coordinator: <тип>_<addr>_<sn5>_active).
         self._attr_name = (sensor_name(self._devtype, sensor_body(custom)) + "_act") if custom \
             else None
-        dev_name = custom or device_name(self._devtype, devsn, self._address)
+        dev_name = custom or hub.device_label(dev)   # режимное имя устройства (v1.2.74)
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, uid_base)}, name=dev_name)
         self._attr_is_on = True  # датчики активируются при старте
         # Ключ предпочтения активности — по ИДЕНТИЧНОСТИ (devSn:devType), а не по адресу (Fix L,

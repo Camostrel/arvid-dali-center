@@ -32,7 +32,8 @@ from .eventlog import get_eventlog
 # цикла нет. Остальные функции naming импортируются отложенно (исторически), см. _desired_entity_id.
 from .identity import (LIGHT_TYPES, MODE_ADDR, address_space, function_key,
                        identity_key, is_addr_key)
-from .naming import is_auto_suffix
+from .naming import (device_name, device_name_addr, gw_suffix, is_auto_suffix,
+                     sn_suffix)
 from .transport.core import GatewaySession, dev_key
 from .transport.decode import is_valid_devsn
 
@@ -1094,6 +1095,30 @@ class DaliGatewayHub:
             return f"{self.gw_sn}:{dev_state_key(str(dev.get('devType')), ch, addr)}"
         return f"{self.gw_sn}:{ch}:{addr}"
 
+    def entity_tail(self, dev: dict) -> str:
+        """Разводящий хвост `entity_id` БЕЗЫМЯННОЙ сущности — режимный (Н4 плана).
+
+        Штатный режим: `sn5` (Fix W, v1.2.0) — он разводит имена при перераздаче адресов и
+        делает переезд между шлюзами незаметным для истории recorder.
+        Адресный: `gw4` — имя производно от адреса, а адреса повторяются на каждом
+        контроллере; переезд между шлюзами в этом режиме и так меняет идентичность.
+        """
+        from .store import get_identity_mode
+        if get_identity_mode(self.hass) == MODE_ADDR:
+            return gw_suffix(self.gw_sn)
+        return sn_suffix(dev.get("devSn") or "")
+
+    def device_label(self, dev: dict) -> str:
+        """Имя УСТРОЙСТВА HA (карточка в реестре) — режимное.
+
+        Штатный: `<слово>_<полный devSn>`. Адресный: `<слово>_<gw4>_<адрес>` — серийник туда не
+        входит, он в этом режиме справочный и может быть пустым или перекошенным."""
+        from .store import get_identity_mode
+        dt = dev.get("devType")
+        if get_identity_mode(self.hass) == MODE_ADDR:
+            return device_name_addr(dt, self.gw_sn, dev.get("address"))
+        return device_name(dt, dev.get("devSn") or "", dev.get("address"))
+
     def name_key_for(self, dev: dict) -> str | None:
         """Ключ ИМЕНИ устройства. `None` = имя хранить нечем (вызывающий не пишет и не читает).
 
@@ -1284,7 +1309,8 @@ class DaliGatewayHub:
                     return (f"{platform}.{oid}", friendly) if oid else (None, None)
             return (None, None)
         # БЕЗЫМЯННОЕ: entity_id по типу+адресу+sn5 (без шлюза); подпись НЕ задаём (None)
-        base = entity_name(dev.get("devType"), dev.get("address"), dev.get("devSn") or "")
+        base = entity_name(dev.get("devType"), dev.get("address"),
+                           tail=self.entity_tail(dev))
         oid = slugify(f"{base}_active" if role.startswith("active_") else base)
         return (f"{platform}.{oid}", None) if oid else (None, None)
 

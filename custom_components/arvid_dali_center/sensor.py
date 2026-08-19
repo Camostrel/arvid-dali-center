@@ -30,7 +30,8 @@ from .coordinator import (
     DaliGatewayHub,
     dev_state_key,
 )
-from .naming import device_name, sensor_body, sensor_name
+from .naming import sensor_body, sensor_name
+sensor_body, sensor_name
 from .transport.decode import MOTION
 
 _LOGGER = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ class _DaliSensorBase(DaliBusEntity, SensorEntity):
         self._devsn = dev.get("devSn") or ""
         self._uid_base = hub.identity(dev)   # единый ключ идентичности (см. хаб)
         # имя УСТРОЙСТВА — по devSn (стабильно навсегда); custom (продакшен) — как есть
-        dev_name = custom or device_name(self._devtype, self._devsn, self._address)
+        dev_name = custom or hub.device_label(dev)   # режимное имя устройства (v1.2.74)
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._uid_base)},
             via_device=(DOMAIN, hub.gw_sn),

@@ -23,7 +23,7 @@ from .coordinator import (
     DaliGatewayHub,
     dev_state_key,
 )
-from .naming import device_name
+
 from .transport.decode import devtype_name
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ class DaliPanelEvent(DaliBusEntity, EventEntity):
             via_device=(DOMAIN, hub.gw_sn),
             manufacturer="Sunricher",
             model=devtype_name(self._devtype),
-            name=custom or device_name(self._devtype, devsn, self._address),
+            name=custom or hub.device_label(dev),   # режимное имя устройства (v1.2.74)
         )
 
     async def async_added_to_hass(self) -> None:

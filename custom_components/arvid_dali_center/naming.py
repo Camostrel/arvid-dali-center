@@ -32,6 +32,7 @@ PANEL_KEYS = {"0302": 2, "0304": 4, "0306": 6, "0308": 8}
 SENSOR_PREFIX = {"0201": "ms", "0202": "il"}
 
 SN_TAIL = 5          # сколько знаков devSn берём в хвост entity_id сущности
+GW_TAIL = 4          # знаков серийника ШЛЮЗА в хвосте entity_id (адресный режим)
 
 
 def sensor_body(name: str) -> str:
@@ -85,14 +86,39 @@ def sn_suffix(devsn: str = "") -> str:
     return s[-SN_TAIL:] if s else ""
 
 
-def entity_name(devtype: str, address, devsn: str = "") -> str:
+def gw_suffix(gw_sn: str = "") -> str:
+    """Разводящий хвост entity_id в АДРЕСНОМ режиме: последние GW_TAIL знаков серийника ШЛЮЗА.
+
+    Зачем он там нужен, хотя в штатном режиме шлюз из имени убран (v1.2.7): в адресном режиме
+    имя производно от АДРЕСА, а адреса 0..63 повторяются на каждом контроллере — без хвоста
+    `light_5` на двух шлюзах столкнулись бы. В штатном режиме эту роль играет `sn5`, и он же
+    делает переезд между шлюзами незаметным для истории; в адресном режиме такой переезд и так
+    меняет идентичность, поэтому `gw4` честен (Н4 плана docs/ADDRESS_IDENTITY.md).
+    """
+    s = str(gw_sn or "").strip().lower()
+    return s[-GW_TAIL:] if s else ""
+
+
+def device_name_addr(devtype: str, gw_sn: str = "", address=None) -> str:
+    """Имя УСТРОЙСТВА HA в адресном режиме: `<тип-слово>_<gw4>_<адрес>`.
+
+    Серийник в него не входит — он в этом режиме справочный и может быть пустым или
+    перекошенным. Имя устройства человек видит редко (он смотрит на `entity_id`), но оно должно
+    быть стабильным и однозначным: координата даёт и то, и другое."""
+    word = device_word(devtype)
+    tail = gw_suffix(gw_sn)
+    parts = [word] + ([tail] if tail else []) + ([str(address)] if address is not None else [])
+    return "_".join(parts)
+
+
+def entity_name(devtype: str, address, devsn: str = "", *, tail: str | None = None) -> str:
     """entity_id/имя БЕЗЫМЯННОЙ сущности: <тип>_<адрес>_<sn5> (напр. motion_14_0ffd6).
 
     ⚠ v1.2.7: шлюза в имени НЕТ (был `_<gw4>`). sn5 уже уникален, а gw4 ломал entity_id при
     переезде между шлюзами (см. докстринг модуля). При пустом devSn — без хвоста."""
     base = f"{type_word(devtype)}_{address}"
-    tail = sn_suffix(devsn)
-    return f"{base}_{tail}" if tail else base
+    t = sn_suffix(devsn) if tail is None else tail   # tail задаёт вызывающий (режим — его знание)
+    return f"{base}_{t}" if t else base
 
 
 def device_name(devtype: str, devsn: str = "", address=None) -> str:

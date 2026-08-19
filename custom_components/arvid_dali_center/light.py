@@ -38,7 +38,7 @@ from .coordinator import (
     DaliGatewayHub,
     dev_state_key,
 )
-from .naming import device_name
+
 from .transport.decode import devtype_name
 
 _LOGGER = logging.getLogger(__name__)
@@ -142,7 +142,7 @@ class DaliLight(DaliBusEntity, LightEntity, RestoreEntity):
             via_device=(DOMAIN, gw_sn),
             manufacturer="Sunricher",
             model=devtype_name(self._devtype),
-            name=custom or device_name(self._devtype, dev.get("devSn") or "", self._address),
+            name=custom or hub.device_label(dev),   # режимное имя устройства (v1.2.74)
         )
         self._attr_is_on: bool | None = None
         self._attr_brightness: int | None = None

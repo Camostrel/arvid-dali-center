@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]
                        / "custom_components" / "arvid_dali_center"))
 
+import naming  # noqa: E402
 from naming import (  # noqa: E402
     device_name,
     device_word,
@@ -137,6 +138,38 @@ class TestSensorNaming(unittest.TestCase):
 
     def test_body_of_plain_name(self):
         self.assertEqual(sensor_body("kitchen"), "kitchen")
+
+
+class TestAddrModeNaming(unittest.TestCase):
+    """Н4 плана docs/ADDRESS_IDENTITY.md: в адресном режиме хвост имени — `gw4`, не `sn5`.
+
+    Почему хвост вообще нужен: имя безымянной сущности производно от АДРЕСА, а адреса 0..63
+    повторяются на каждом контроллере — без хвоста `light_5` на двух шлюзах столкнулись бы.
+    """
+
+    def test_gw_suffix_four_chars(self):
+        self.assertEqual(naming.gw_suffix("E22435088727"), "8727")
+        self.assertEqual(naming.gw_suffix(""), "")
+
+    def test_entity_name_takes_explicit_tail(self):
+        """Хвост задаёт вызывающий: режим — знание хаба, не функции имени."""
+        self.assertEqual(naming.entity_name("0201", 14, tail="8727"), "motion_14_8727")
+        self.assertEqual(naming.entity_name("0201", 14, tail=""), "motion_14")
+
+    def test_entity_name_default_is_unchanged(self):
+        """⚠ Без явного хвоста поведение штатного режима прежнее (sn5)."""
+        self.assertEqual(naming.entity_name("0201", 14, "E0387029A0FFD6"),
+                         naming.entity_name("0201", 14, tail=naming.sn_suffix("E0387029A0FFD6")))
+
+    def test_device_name_addr_has_no_serial(self):
+        """Имя устройства в адресном режиме не содержит серийника — он там справочный
+        и может быть пустым или перекошенным."""
+        name = naming.device_name_addr("0201", "E22435088727", 14)
+        self.assertEqual(name, "sensor_8727_14")
+        self.assertNotIn("E2243508", name)
+
+    def test_device_name_addr_survives_missing_parts(self):
+        self.assertEqual(naming.device_name_addr("0101", "", None), "light")
 
 
 if __name__ == "__main__":

@@ -62,11 +62,14 @@ def scope(hass: HomeAssistant) -> dict:
             for _role, platform, uid in hub._roles_for_dev(dev):
                 if ent_reg.async_get_entity_id(platform, DOMAIN, uid):
                     entities += 1
-    # карточки устройств этой интеграции (кроме самих шлюзов и групп)
+    # Карточки устройств этой интеграции — БЕЗ самих шлюзов и групп. Шлюз тоже заведён
+    # карточкой (`identifiers == gwSn`), и без этого фильтра число в подтверждении было бы
+    # завышено — человек увидел бы «снесётся на 27 больше, чем есть».
+    gw_idents = {g["gw_sn"] for g in gateways}
     cards = 0
     for entry in dev_reg.devices.values():
         idents = {i[1] for i in (entry.identifiers or set()) if i[0] == DOMAIN}
-        if idents and not any("_group_" in i for i in idents):
+        if idents and not (idents & gw_idents) and not any("_group_" in i for i in idents):
             cards += 1
     return {"mode": current_mode(hass), "modes": list(MODES), "gateways": gateways,
             "devices": devices, "entities": entities, "device_cards": cards}
@@ -105,9 +108,13 @@ async def switch_mode(hass: HomeAssistant, new_mode: str) -> dict:
                 if eid:
                     ent_reg.async_remove(eid)
                     removed_entities += 1
-            # карточка устройства ключуется тем же способом, что и сущности
-            ident = hub.identity(dev)
-            if ident:
+            # Карточка устройства ключуется тем же способом, что и сущности. ⚠ У ЛАМП
+            # исторический фолбэк включает `devType` (`identity(light=True)`), поэтому у
+            # безсерийной лампы это ДРУГОЙ ключ — берём оба варианта, иначе её карточка
+            # пережила бы смену режима и осталась висеть пустой.
+            for ident in {hub.identity(dev), hub.identity(dev, light=True)}:
+                if not ident:
+                    continue
                 idents.add(ident)
                 card = dev_reg.async_get_device(identifiers={(DOMAIN, ident)})
                 if card:
@@ -133,7 +140,27 @@ async def switch_mode(hass: HomeAssistant, new_mode: str) -> dict:
     store = get_identity_mode_store(hass)
     if store:
         await store.async_set(mode)
-    _LOGGER.warning("РЕЖИМ ИДЕНТИЧНОСТИ %s → %s: снято сущностей %d, карточек %d, корзина %s",
-                    was, mode, removed_entities, removed_cards, trash)
+    # ПЕРЕЗАГРУЗКА записей: платформы уже созданы и держат сущности старого поколения (их
+    # объекты живут в HA, даже когда записи реестра сняты). Без reload состояние оставалось бы
+    # половинчатым до рестарта HA — а рестарт мы делать не вправе.
+    #
+    # ⚠ ПЛАНИРУЕМ, а не ждём. Эту операцию зовут в том числе из options flow, который сам
+    # принадлежит перезагружаемой записи: `await async_reload` там ждал бы завершения потока,
+    # который ждёт нас — дедлок. `async_schedule_reload` выполняет перезагрузку после того, как
+    # текущий вызов вернётся.
+    reloaded = 0
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        try:
+            if hasattr(hass.config_entries, "async_schedule_reload"):
+                hass.config_entries.async_schedule_reload(entry.entry_id)
+            else:                      # старые ядра HA: то же самое, но задачей
+                hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+            reloaded += 1
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("reload записи %s после смены режима: %s", entry.entry_id, err)
+    _LOGGER.warning("РЕЖИМ ИДЕНТИЧНОСТИ %s → %s: снято сущностей %d, карточек %d, корзина %s, "
+                    "перезагружено записей %d", was, mode, removed_entities, removed_cards,
+                    trash, reloaded)
     return {"ok": True, "changed": True, "mode": mode, "was": was,
-            "removed_entities": removed_entities, "removed_cards": removed_cards, "trash": trash}
+            "removed_entities": removed_entities, "removed_cards": removed_cards,
+            "trash": trash, "reloaded": reloaded}

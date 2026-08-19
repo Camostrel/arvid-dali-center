@@ -29,8 +29,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util, slugify
 
 from .const import DOMAIN
-from .identity import MODES as IDENTITY_MODES
-from .identity import is_addr_key
+from .identity import MODES as IDENTITY_MODES, is_addr_key
 from .coordinator import dev_state_key
 from .eventlog import SIGNAL_EVENTLOG, get_eventlog
 from .store import (
@@ -71,7 +70,13 @@ def _is_device_ident(ident: str, gw_sn: str) -> bool:
     потому что ключи там выглядят как `addr:<gw>:<кан>:<класс>:<адрес>`. Отказ был бы тихим:
     «Стереть данные» отработала бы с отчётом «0 устройств», не тронув ничего.
     """
-    if not ident or ident == gw_sn or "_group_" in ident:
+    if not ident or ident == gw_sn:
+        return False
+    # ⚠ Служебные ключи отсекаем ЯВНО. `is_valid_devsn` — проверка «не вырожденный»
+    # (не все байт-пары одинаковы), а НЕ «это серийник»: строку `xgrp_08727_0FFD6_0_3` она
+    # пропускает. Кросс-группа из-за этого попадала в цели «Стереть данные» — сторов по её
+    # ключу нет, но карточке сбрасывалось имя, причём с ОДНОГО шлюза-участника.
+    if "_group_" in ident or ident.startswith("xgrp_") or ident.endswith("_all_lights"):
         return False
     return is_addr_key(ident) or is_valid_devsn(ident)
 

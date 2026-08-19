@@ -323,5 +323,30 @@ class TestOperationsWorkInBothModes(unittest.TestCase):
         self.assertIn('"ident":', self._src("websocket_api.py"))
 
 
+class TestWipeTargetsAreDevicesOnly(unittest.TestCase):
+    """Аудит v1.2.78: `is_valid_devsn` — проверка «не вырожденный», а НЕ «это серийник».
+
+    Она пропускает строку `xgrp_08727_0FFD6_0_3`, поэтому кросс-группа попадала в цели
+    «Стереть данные»: хранилищ по её ключу нет, но карточке сбрасывалось имя — с ОДНОГО
+    шлюза-участника, хотя группа общая. Служебные ключи теперь отсекаются явно.
+    """
+
+    def _predicate(self):
+        src = (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
+               / "arvid_dali_center" / "websocket_api.py").read_text(encoding="utf-8")
+        i = src.index("def _is_device_ident(")
+        return src[i:src.index("\n\n\n", i)]
+
+    def test_service_keys_are_excluded(self):
+        body = self._predicate()
+        for marker in ('"_group_" in ident', 'ident.startswith("xgrp_")',
+                       'ident.endswith("_all_lights")'):
+            self.assertIn(marker, body, f"служебный ключ не отсекается: {marker}")
+
+    def test_both_key_natures_pass(self):
+        body = self._predicate()
+        self.assertIn("is_addr_key(ident) or is_valid_devsn(ident)", body)
+
+
 if __name__ == "__main__":
     unittest.main()

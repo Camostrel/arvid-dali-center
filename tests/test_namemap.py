@@ -165,8 +165,10 @@ class TestStitch(unittest.TestCase):
         `rename` переименует пару. Карта строк 0202 не содержит, и люкс на шине не должен
         выглядеть «нет в карте» — иначе на объекте это 190 строк мнимых проблем."""
         rows, _ = namemap.parse_map(csv_of(f"{GW};0201;5;ms;2.1.1;ms_2_1_1;;;;;;"))
+        # ⚠ адрес у пары ОДИН (факт железа, подтверждён пользователем 2026-08-19): до v1.2.77
+        # тест ставил люксу адрес 6, и это расходилось с физикой — родство держалось на devSn
         table = namemap.stitch(rows, [dev(devtype="0201", address=5, devsn="SN1"),
-                                      dev(devtype="0202", address=6, devsn="SN1")], GW)
+                                      dev(devtype="0202", address=5, devsn="SN1")], GW)
         lux = next(r for r in table if r["devType"] == "0202")
         self.assertEqual(lux["status"], namemap.ST_PAIRED)
         self.assertTrue(lux["skip"])
@@ -199,8 +201,10 @@ class TestStitch(unittest.TestCase):
         rows, _ = namemap.parse_map(csv_of(
             f"{GW};0201;5;ms;2.1.1;ms_2_1_1;;;;;;",
             f"{GW};0202;6;il;2.1.2;il_2_1_2;;;;;;"))
+        # ⚠ адрес у пары ОДИН (факт железа, подтверждён пользователем 2026-08-19): до v1.2.77
+        # тест ставил люксу адрес 6, и это расходилось с физикой — родство держалось на devSn
         table = namemap.stitch(rows, [dev(devtype="0201", address=5, devsn="SN1"),
-                                      dev(devtype="0202", address=6, devsn="SN1")], GW)
+                                      dev(devtype="0202", address=5, devsn="SN1")], GW)
         lux = next(r for r in table if r["devType"] == "0202")
         self.assertEqual(lux["status"], namemap.ST_PAIRED)
         self.assertTrue(lux["skip"])

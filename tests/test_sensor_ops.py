@@ -45,10 +45,15 @@ class TestUnitKeys(unittest.TestCase):
         devs = {"0101:0:8": dev("0101", 8, "BB22"), "0201:0:8": dev("0201", 8, "AA11")}
         self.assertEqual(so.unit_keys(devs, "0101:0:8"), ["0101:0:8"])
 
-    def test_other_devsn_not_paired(self):
-        """Тот же адрес, но ДРУГОЙ серийник — разные приборы (перенумерация/мис-энумерация)."""
+    def test_same_address_is_one_device_even_if_serials_differ(self):
+        """⚠ Поведение ИЗМЕНЕНО в v1.2.77 (факт железа от пользователя 2026-08-19): движение и
+        освещённость ВСЕГДА на одном адресе и под одним серийником, без исключений.
+
+        Значит расходящиеся серийники на одном адресе — это не «разные приборы», а ВРАНЬЁ ШЛЮЗА
+        (перекрёст, docs/DEVSN_CROSSWIRE.md). Раньше родство в этом случае не выводилось, и
+        «Забыть» сносило половину физического устройства, оставляя вторую висеть."""
         devs = {"0201:0:8": dev("0201", 8, "AA11"), "0202:0:8": dev("0202", 8, "CC33")}
-        self.assertEqual(so.unit_keys(devs, "0201:0:8"), ["0201:0:8"])
+        self.assertEqual(so.unit_keys(devs, "0201:0:8"), ["0201:0:8", "0202:0:8"])
 
     def test_other_address_not_paired(self):
         devs = {"0201:0:8": dev("0201", 8, "AA11"), "0202:0:9": dev("0202", 9, "AA11")}
@@ -67,10 +72,14 @@ class TestUnitKeys(unittest.TestCase):
         self.assertEqual(sorted(so.unit_keys(devs, "orphan:AA11:0201")),
                          ["orphan:AA11:0201", "orphan:AA11:0202"])
 
-    def test_empty_devsn_no_kinship(self):
-        """Без серийника связать записи нечем — не гадаем (ключ адресный, а адрес волатилен)."""
+    def test_pair_without_serial_is_still_a_pair(self):
+        """⚠ Поведение ИЗМЕНЕНО в v1.2.77: без серийника родство теперь ВЫВОДИТСЯ — по адресу.
+
+        Прежнее «связать нечем» было честным, пока серийник считался единственной опорой. Но у
+        ламп и датчиков DALI-1 серийника может не быть вовсе, и тогда «Забыть» молча сносило
+        одну половину датчика вместо целого устройства."""
         devs = {"0201:0:8": dev("0201", 8, ""), "0202:0:8": dev("0202", 8, "")}
-        self.assertEqual(so.unit_keys(devs, "0201:0:8"), ["0201:0:8"])
+        self.assertEqual(so.unit_keys(devs, "0201:0:8"), ["0201:0:8", "0202:0:8"])
 
     def test_unknown_key(self):
         self.assertEqual(so.unit_keys({}, "0201:0:8"), [])

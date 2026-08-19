@@ -216,7 +216,36 @@ class TestEmitTemplate(unittest.TestCase):
         """Кросс-группы должны исполняться в фазе `groups` — иначе `--only groups` их потеряет."""
         body = self._render()
         self.assertIn("def do_cross_groups(", body)
-        self.assertIn('if a.only in (None, "groups") and CROSS:', body)
+        # условие проверяем по СМЫСЛУ, а не буквой: с v1.2.69 к нему добавился гейт остановки
+        # (`and not STOP["on"]`), и сторож на точную строку падал бы на каждой такой правке
+        self.assertRegex(body, r'if a\.only in \(None, "groups"\) and CROSS[ :]')
+
+    def test_soft_stop_wired(self):
+        """v1.2.69: мягкая остановка. Прогон объекта идёт минутами, и прервать его надо уметь —
+        но ТОЛЬКО между записями: обрыв посреди `delGroup`+`addGroup` оставит группу СНЕСЁННОЙ.
+        Сторож следит, что обработчик сигнала есть, что он лишь поднимает флаг, и что каждая
+        фаза этот флаг проверяет."""
+        body = self._render()
+        self.assertIn("signal.signal(signal.SIGTERM", body)
+        self.assertIn("def stopped(", body)
+        for phase in ("группы", "кросс-группы", "пространства", "автояркость", "панели"):
+            self.assertIn(f'if stopped("{phase}"', body)
+        # между фазами флаг тоже проверяется: остановили на группах — в автояркость не идём
+        self.assertIn('and not STOP["on"]', body)
+
+    def test_progress_counter_in_every_phase(self):
+        """v1.2.69: `[k/M]` в строках результата — источник прогресса для карточки и опора для
+        человека («идёт ли оно вообще»). Без счётчика фоновый прогон = «нажал и гадай»."""
+        body = self._render()
+        for coll in ("GROUPS", "CROSS", "AREAS", "AUTOBRIGHT", "PANELS"):
+            self.assertIn(f"for i, ", body)
+            self.assertIn(f"total = len({coll})", body)
+        self.assertIn("[{i}/{total}]", body)
+
+    def test_output_is_unbuffered(self):
+        """Журнал читают ВО ВРЕМЯ прогона: без flush python копит вывод блоками 4–8 КБ, и
+        карточка показывала бы пустоту минутами (прогон выглядит зависшим)."""
+        self.assertIn("print = functools.partial(print, flush=True)", self._render())
 
     def test_cross_requires_two_gateways(self):
         """Гейт «участников ≥2»: одношлюзовый состав — это обычная группа, не кросс."""

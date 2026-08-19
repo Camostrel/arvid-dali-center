@@ -21,7 +21,7 @@
 //       общим группам помещений, по умолчанию `ba_area_light`; зонным не ставим).
 // Бэкенд НЕ дублируем: используем те же WS arvid_dali_center/* и сервисы HA.
 
-const VERSION = '0.12';
+const VERSION = '0.13';
 const LS_KEY = 'arvid-dali-commissioning';
 
 // классы вкладок и префикс имени по типу устройства
@@ -81,6 +81,7 @@ class ArvidDaliCommissioning extends HTMLElement {
       // запускает сгенерированный apply_*.py. Токен живёт в этом shell_command, не у нас.
       planScript: saved.planScript || '', planPhase: saved.planPhase || '',
       planOut: '', planBusy: '', planCode: null, planLog: '', planRunning: false,
+      planProg: null,   // {done,total,ok,warn,bad,skip,soft} — разбор журнала
     };
   }
 
@@ -491,11 +492,12 @@ class ArvidDaliCommissioning extends HTMLElement {
           <button class="btn ghost" data-act="planDry"${s.planBusy ? ' disabled' : ''}>Проверить (dry-run)</button>
           <button class="btn" data-act="planApply"${s.planBusy ? ' disabled' : ''}>Применить</button>
           <button class="btn ghost" data-act="planLog">Журнал</button>
+          ${s.planRunning ? '<button class="btn stop" data-act="planStop">Остановить</button>' : ''}
         </div>
         ${s.planBusy ? `<div class="busy">${this._esc(s.planBusy)}</div>` : ''}
         <div class="muted sm">Прогон идёт в ФОНЕ: 216 групп — это 6–8 минут, а HA обрывает
           команду через 60 с. Кнопка возвращает управление сразу, ход работы смотрите в журнале.</div>
-        ${s.planRunning ? '<div class="busy">Идёт прогон… журнал обновляется</div>' : ''}
+        ${this._planProgressHtml()}
         ${s.planLog ? `<pre class="plan-out">${this._esc(s.planLog)}</pre>` : ''}
         ${out}
       </div>`;
@@ -508,9 +510,12 @@ class ArvidDaliCommissioning extends HTMLElement {
     const script = (this._s.planScript || '').trim();
     if (!script) { this._toast('Укажите имя скрипта', true); return; }
     try {
-      const r = await this._ws({ type: 'arvid_dali_center/apply_log', script });
+      // lines: 1000 — прогон объекта это ~300 строк; берём его ЦЕЛИКОМ, иначе счётчики
+      // «подтверждено/отказано» считались бы по обрезанному хвосту и врали бы в меньшую сторону.
+      const r = await this._ws({ type: 'arvid_dali_center/apply_log', script, lines: 1000 });
       this._s.planLog = r.log || '(журнал пуст — прогон ещё не запускался)';
       this._s.planRunning = !!r.running;
+      this._s.planProg = this._parsePlanLog(r.log || '');
       this._render();
       clearTimeout(this._logTimer);
       if (r.running) this._logTimer = setTimeout(() => this._loadPlanLog(true), 2000);
@@ -519,6 +524,78 @@ class ArvidDaliCommissioning extends HTMLElement {
       this._s.planRunning = false;
       if (!auto) this._toast('Журнал: ' + e.message, true);
     }
+  }
+
+  // Разбор журнала: сколько сделано и с каким исходом. Скрипт печатает «[12/216]» в КАЖДОЙ
+  // строке результата — это и человеку понятно, и нам хватает как источника прогресса.
+  // Счётчики берём по значкам, которые ставит сам скрипт: ✅ подтв. · ⚠ без сверки ·
+  // ❌ не подтв. · = уже в HA. Ничего не додумываем: чего в журнале нет, того не показываем.
+  _parsePlanLog(text) {
+    if (!text) return null;
+    const lines = text.split('\n');
+    let done = 0, total = 0, ok = 0, warn = 0, bad = 0, skip = 0;
+    for (const ln of lines) {
+      const m = ln.match(/\[(\d+)\/(\d+)\]/);
+      if (m) { done = +m[1]; total = +m[2]; }
+      if (!m) continue;
+      if (ln.includes('✅')) ok++;
+      else if (ln.includes('⚠')) warn++;
+      else if (ln.includes('❌')) bad++;
+      else if (/\]\s*=/.test(ln)) skip++;
+    }
+    return {
+      done, total, ok, warn, bad, skip,
+      // маркер печатает скрипт нового поколения: без него SIGTERM убьёт процесс СРАЗУ,
+      // а обрыв между delGroup и addGroup оставит группу снесённой — предупреждаем человека
+      soft: text.includes('мягкая остановка поддерживается'),
+      stopped: text.includes('ПРОГОН ОСТАНОВЛЕН'),
+      finished: text.includes('ПРОГОН ЗАВЕРШЁН'),
+    };
+  }
+
+  _planProgressHtml() {
+    const s = this._s, p = s.planProg;
+    if (!s.planRunning && !p) return '';
+    if (!p || !p.total) {
+      return s.planRunning ? '<div class="busy">Идёт прогон… журнал обновляется</div>' : '';
+    }
+    const pct = Math.min(100, Math.round((p.done / p.total) * 100));
+    const head = s.planRunning ? `Идёт прогон: ${p.done} из ${p.total}`
+      : p.stopped ? `⛔ Остановлено на ${p.done} из ${p.total}`
+      : p.finished ? `Завершено: ${p.done} из ${p.total}`
+      : `Последний прогон: ${p.done} из ${p.total}`;
+    return `<div class="prog">
+        <div class="prog-head">${this._esc(head)}</div>
+        <div class="prog-bar"><i style="width:${pct}%"></i></div>
+        <div class="prog-num">
+          <span class="ok">✅ ${p.ok} подтв.</span>
+          <span class="warn">⚠ ${p.warn} без сверки</span>
+          <span class="bad">❌ ${p.bad} не подтв.</span>
+          <span class="muted">= ${p.skip} уже в HA</span>
+        </div>
+      </div>`;
+  }
+
+  // ОСТАНОВКА прогона. Мягкая: бэкенд шлёт SIGTERM, скрипт доканчивает текущую запись и
+  // выходит МЕЖДУ группами (обрыв посреди delGroup+addGroup оставил бы группу снесённой).
+  async _stopPlan() {
+    const script = (this._s.planScript || '').trim();
+    if (!script) { this._toast('Укажите имя скрипта', true); return; }
+    const p = this._s.planProg;
+    const risk = (p && !p.soft)
+      ? '\n\n⚠ В журнале нет отметки о мягкой остановке — этот скрипт сгенерирован старой '
+        + 'версией. Процесс завершится СРАЗУ, и группа, которая пишется в этот момент, может '
+        + 'остаться удалённой. Безопаснее дождаться конца фазы.'
+      : '\n\nСкрипт доканчивает текущую запись и останавливается между группами.';
+    if (!confirm(`Остановить прогон «${script}»?${risk}`)) return;
+    try {
+      const r = await this._ws({ type: 'arvid_dali_center/apply_stop', script });
+      if (r && r.ok) this._toast('Остановка запрошена — ждём завершения текущей записи');
+      else this._toast('Остановить не вышло: ' + ((r && r.error) || 'неизвестно'), true);
+    } catch (e) {
+      this._toast('Остановить: ' + e.message, true);
+    }
+    this._loadPlanLog(true);
   }
 
   async _runPlan(apply) {
@@ -819,6 +896,7 @@ class ArvidDaliCommissioning extends HTMLElement {
     else if (act === 'planDry') this._runPlan(false);
     else if (act === 'planApply') this._runPlan(true);
     else if (act === 'planLog') this._loadPlanLog(false);
+    else if (act === 'planStop') this._stopPlan();
     else if (act === 'toggle') { const d = this._devByIdx(el); if (d) this._toggleLamp(d); }
     else if (act === 'rename') { const d = this._devByIdx(el); if (d) { this._s.rename = { dev: d }; this._render(); setTimeout(() => { const f = this.shadowRoot.getElementById('nmFloor'); if (f) f.focus(); }, 0); } }
     else if (act === 'saveName') this._saveName();
@@ -939,6 +1017,14 @@ select{width:100%;min-height:44px;border:1px solid #cfe0f5;border-radius:10px;pa
   font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;
   word-break:break-word;max-height:50vh;overflow:auto;text-align:left}
 .plan-out.bad{border:1px solid #DC2626}
+.plan-btns .btn.stop{background:#DC2626;color:#fff;border-color:#DC2626}
+.prog{margin-top:12px}
+.prog-head{font-weight:600;margin-bottom:6px}
+.prog-bar{height:10px;border-radius:6px;background:#E2E8F0;overflow:hidden}
+.prog-bar i{display:block;height:100%;background:linear-gradient(90deg,#2563EB,#60A5FA);
+  transition:width .3s ease}
+.prog-num{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px;font-size:13px}
+.prog-num .ok{color:#059669}.prog-num .warn{color:#B45309}.prog-num .bad{color:#DC2626}
 .pad .fld{text-align:left}.muted.sm{font-size:12px;text-align:left}
 `;
 

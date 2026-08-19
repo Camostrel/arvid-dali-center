@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import signal
 
 import voluptuous as vol
 
@@ -184,6 +185,7 @@ def async_register(hass: HomeAssistant) -> None:
                 ws_set_cross_group_members, ws_del_cross_group, ws_cross_group_write,
                 # чистка реестра HA от пустых карточек устройств (v1.2.47)
                 ws_registry_orphans, ws_registry_cleanup, ws_registry_trash, ws_apply_log,
+                ws_apply_stop,
                 # карта имён для переезда объекта (v1.2.55): только чтение + область.
                 # Имена применяет `ws_rename` — он не переписан ради этой задачи.
                 ws_namemap_files, ws_namemap_table, ws_set_area, ws_set_group_labels,
@@ -611,6 +613,67 @@ async def ws_apply_log(hass, connection, msg):
 
     text, running = await hass.async_add_executor_job(_read)
     connection.send_result(msg["id"], {"log": text, "running": running, "file": log_path})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): "arvid_dali_center/apply_stop",
+    vol.Required("script"): str,              # имя скрипта, напр. apply_voronezh.py
+})
+@websocket_api.async_response
+async def ws_apply_stop(hass, connection, msg):
+    """Остановить идущий прогон автопусконаладки — МЯГКО.
+
+    Зачем команда, а не второй `shell_command`: тот пришлось бы заводить руками в
+    `configuration.yaml` на каждом объекте, а забытая настройка означает прогон, который нечем
+    прервать. Здесь всё внутри интеграции.
+
+    ⚠ Останов МЯГКИЙ и это принципиально: создание группы = `delGroup` + `addGroup`, и обрыв
+    между ними оставил бы группу СНЕСЁННОЙ. `SIGTERM` в сгенерированном скрипте только поднимает
+    флаг, выход происходит МЕЖДУ записями (см. `stopped()` в шаблоне `tools/import_project.py`).
+    Скрипты, сгенерированные ДО v1.2.69, обработчика не имеют — там `SIGTERM` завершит процесс
+    сразу; такой прогон лучше не прерывать на фазе групп (карточка предупреждает: маркер
+    «мягкая остановка поддерживается» печатается в журнал при старте).
+
+    ⛔ `SIGKILL` не шлём НИКОГДА — процесс должен успеть закончить запись.
+    """
+    base = str(msg["script"]).strip()
+    if not base.endswith(".py") or "/" in base or ".." in base:
+        connection.send_error(msg["id"], "bad_request", "ожидается имя скрипта вида apply_x.py")
+        return
+    pid_path = hass.config.path("tools", f"{base[:-3]}.pid")
+
+    def _stop():
+        try:
+            with open(pid_path, encoding="utf-8") as f:
+                pid = int(f.read().strip())
+        except (OSError, ValueError):
+            return {"ok": False, "error": "прогон не запускался (нет pid-файла)"}
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return {"ok": False, "error": "прогон уже не выполняется"}
+        # Сверяем, ЧЕЙ это pid: номера переиспользуются, и без проверки мы могли бы прибить
+        # чужой процесс, занявший тот же номер. Адресуем идентичностью, а не номером.
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmdline = f.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+        except OSError:
+            return {"ok": False, "error": f"не удалось прочитать /proc/{pid}/cmdline — "
+                                          f"остановите вручную: kill {pid}"}
+        if base not in cmdline:
+            return {"ok": False, "error": f"pid {pid} занят другим процессом ({cmdline.strip()[:80]}) "
+                                          f"— не трогаю"}
+        os.kill(pid, signal.SIGTERM)
+        return {"ok": True, "pid": pid}
+
+    res = await hass.async_add_executor_job(_stop)
+    if res.get("ok"):
+        _LOGGER.warning("apply_stop: послан SIGTERM прогону %s (pid %s) — остановка мягкая",
+                        base, res.get("pid"))
+    else:
+        _LOGGER.info("apply_stop %s: %s", base, res.get("error"))
+    connection.send_result(msg["id"], res)
 
 
 @websocket_api.require_admin

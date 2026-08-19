@@ -824,7 +824,40 @@ _EMIT_TEMPLATE = r'''#!/usr/bin/env python3
   не по контроллеру). Удалил группу в карточке → пересоздастся. АВТОЯРКОСТЬ/ПАНЕЛИ применяются
   каждый раз (у них нет HA-сущности, del+add идемпотентен). Транзиентный сбой прогрева — с ретраем.
 """
-import argparse, base64, json, os, socket, ssl, struct, sys, time
+import argparse, base64, json, os, signal, socket, ssl, struct, sys, time
+
+# Журнал читают ВО ВРЕМЯ прогона (кнопка «Журнал» в карточке), а python при выводе в файл
+# буферизует блоками по 4–8 КБ — без этого строки долетали бы пачками, с минутным лагом, и
+# прогресс выглядел бы «зависшим». Обёртка дешевле, чем помнить про flush в каждой печати.
+import functools
+print = functools.partial(print, flush=True)
+
+
+# ═══════════════ МЯГКАЯ ОСТАНОВКА ═══════════════
+# Прогон объекта идёт минутами, и человеку нужно уметь его прервать. Убивать процесс жёстко
+# НЕЛЬЗЯ: создание группы — это `delGroup` + `addGroup`, и обрыв между ними оставит группу
+# СНЕСЁННОЙ (закон «без авто-деструктива»: нельзя оставлять объект в состоянии, которого никто
+# не выбирал). Поэтому сигнал только ПОДНИМАЕТ ФЛАГ, а выход происходит МЕЖДУ записями.
+STOP = {"on": False}
+
+
+def _on_stop(signum, frame):
+    if not STOP["on"]:
+        STOP["on"] = True
+        print("\n⛔ ПОЛУЧЕН СИГНАЛ ОСТАНОВКИ — доканчиваю текущую запись и выхожу…", flush=True)
+
+
+signal.signal(signal.SIGTERM, _on_stop)
+signal.signal(signal.SIGINT, _on_stop)
+
+
+def stopped(phase: str, done: int, total: int) -> bool:
+    """Проверка в начале каждой итерации: пора ли выйти. Печатает, на чём остановились."""
+    if STOP["on"]:
+        print(f"⛔ ОСТАНОВЛЕНО ОПЕРАТОРОМ: {phase} — сделано {done} из {total}, "
+              f"остальное НЕ применялось", flush=True)
+        return True
+    return False
 
 # ═══════════════ НАСТРОЙКА ═══════════════
 # Адрес HA. В терминале аддона «Terminal & SSH» localhost обычно НЕ ядро HA — тогда укажи
@@ -1029,31 +1062,33 @@ def do_groups(ws, emap, apply, force, pace):
     """Группы: пропуск, если HA УЖЕ ЗНАЕТ группу тем же составом (кеш HA, не контроллер). Иначе
     create_group + ПРОВЕРКА: ok (ack) и verify.match (перечитка состава с контроллера)."""
     ok = warn = bad = skip = 0; cache = {}
-    for g in GROUPS:
+    total = len(GROUPS)
+    for i, g in enumerate(GROUPS, 1):
+        if stopped("группы", i - 1, total): break
         members, gws, miss = [], set(), []
         for eid in g["members"]:
             r = emap.get(eid)
             if not r: miss.append(eid); continue
             members.append({"devType": r["devType"], "channel": r["channel"], "address": r["address"]})
             gws.add(r["gw_sn"])
-        if miss: print(f"  ПРОПУСК {g['name']}: не найдены {miss}"); bad += 1; continue
-        if len(gws) != 1: print(f"  ПРОПУСК {g['name']}: лампы на разных шлюзах {gws}"); bad += 1; continue
+        if miss: print(f"  [{i}/{total}] ПРОПУСК {g['name']}: не найдены {miss}"); bad += 1; continue
+        if len(gws) != 1: print(f"  [{i}/{total}] ПРОПУСК {g['name']}: лампы на разных шлюзах {gws}"); bad += 1; continue
         gw = next(iter(gws))
         want = {(m["channel"], m["address"]) for m in members}
         if not force and _ha_groups(ws, gw, cache).get((DALI_CHANNEL, g["dali_num"])) == want:
-            print(f"  = {g['name']} id={g['dali_num']}: HA уже знает тем же составом, пропуск"); skip += 1; continue
+            print(f"  [{i}/{total}] = {g['name']} id={g['dali_num']}: HA уже знает тем же составом, пропуск"); skip += 1; continue
         if not apply:
-            print(f"  [dry] create_group {g['name']} id={g['dali_num']} gw={gw} ламп={len(members)}"); ok += 1; continue
+            print(f"  [{i}/{total}] [dry] create_group {g['name']} id={g['dali_num']} gw={gw} ламп={len(members)}"); ok += 1; continue
         res = apply_cmd(ws, "arvid_dali_center/create_group", gw_sn=gw, channel=DALI_CHANNEL,
                         groupId=g["dali_num"], name=g["name"], members=members)
         v = res.get("verify") or {}
         if not res.get("ok"):
-            print(f"  ❌ {g['name']} id={g['dali_num']}: НЕ подтверждено ({res.get('error') or 'шлюз не ack'})"); bad += 1
+            print(f"  [{i}/{total}] ❌ {g['name']} id={g['dali_num']}: НЕ подтверждено ({res.get('error') or 'шлюз не ack'})"); bad += 1
         elif v.get("match") is False:
-            print(f"  ⚠ {g['name']} id={g['dali_num']}: записано, но сверка состава НЕ совпала "
+            print(f"  [{i}/{total}] ⚠ {g['name']} id={g['dali_num']}: записано, но сверка состава НЕ совпала "
                   f"(недобавл={v.get('missing')}, лишние={v.get('extra')})"); warn += 1
         else:
-            print(f"  ✅ {g['name']} id={g['dali_num']} ({len(members)} ламп) подтверждено"); ok += 1
+            print(f"  [{i}/{total}] ✅ {g['name']} id={g['dali_num']} ({len(members)} ламп) подтверждено"); ok += 1
         time.sleep(pace)
     if apply:
         print(f"группы: ✅{ok} подтв., ⚠{warn} без сверки, ❌{bad} НЕ подтв., ={skip} уже в HA")
@@ -1089,7 +1124,9 @@ def do_cross_groups(ws, emap, apply, force, pace):
         return
     ok = warn = bad = skip = 0
     cache = {}
-    for g in CROSS:
+    total = len(CROSS)
+    for i, g in enumerate(CROSS, 1):
+        if stopped("кросс-группы", i - 1, total): break
         members, gws, miss = [], set(), []
         for eid in g["members"]:
             r = emap.get(eid)
@@ -1099,19 +1136,19 @@ def do_cross_groups(ws, emap, apply, force, pace):
                             "channel": r["channel"], "address": r["address"]})
             gws.add(r["gw_sn"])
         if miss:
-            print(f"  ПРОПУСК {g['name']}: не найдены {miss}"); bad += 1; continue
+            print(f"  [{i}/{total}] ПРОПУСК {g['name']}: не найдены {miss}"); bad += 1; continue
         # ГЕЙТ: участников меньше двух — это обычная группа, и создавать её надо create_group.
         # Такое бывает, когда лампы «разных шин» по проекту физически сидят на одном шлюзе.
         if len(gws) < 2:
-            print(f"  ПРОПУСК {g['name']}: лампы на ОДНОМ контроллере ({gws}) — это не "
+            print(f"  [{i}/{total}] ПРОПУСК {g['name']}: лампы на ОДНОМ контроллере ({gws}) — это не "
                   f"кросс-группа, проверьте таблицу линия→шлюз"); bad += 1; continue
         want = {(str(m["gwSnObj"]).upper(), m["channel"], m["address"]) for m in members}
         have = _ha_cross_groups(ws, cache).get((DALI_CHANNEL, g["dali_num"], g["name"]))
         if not force and have == want:
-            print(f"  = {g['name']} id={g['dali_num']}: HA уже знает тем же составом, пропуск")
+            print(f"  [{i}/{total}] = {g['name']} id={g['dali_num']}: HA уже знает тем же составом, пропуск")
             skip += 1; continue
         if not apply:
-            print(f"  [dry] create_cross_group {g['name']} id={g['dali_num']} "
+            print(f"  [{i}/{total}] [dry] create_cross_group {g['name']} id={g['dali_num']} "
                   f"шлюзов={len(gws)} ламп={len(members)}"); ok += 1; continue
         res = apply_cmd(ws, "arvid_dali_center/create_cross_group", channel=DALI_CHANNEL,
                         groupId=g["dali_num"], name=g["name"], members=members)
@@ -1121,14 +1158,14 @@ def do_cross_groups(ws, emap, apply, force, pace):
         unverified = [r.get("gw") for r in results
                       if r.get("ok") and (r.get("verify") or {}).get("match") is False]
         if not res.get("ok"):
-            print(f"  ❌ {g['name']} id={g['dali_num']}: НЕ подтверждено "
+            print(f"  [{i}/{total}] ❌ {g['name']} id={g['dali_num']}: НЕ подтверждено "
                   f"({res.get('error') or 'не ack: ' + ', '.join(map(str, bad_gw))})"); bad += 1
         elif unverified or res.get("warnings"):
-            print(f"  ⚠ {g['name']} id={g['dali_num']}: записано, но "
+            print(f"  [{i}/{total}] ⚠ {g['name']} id={g['dali_num']}: записано, но "
                   + (f"состав не сверился на {unverified}" if unverified else "")
                   + ("; ".join(res.get("warnings") or []))); warn += 1
         else:
-            print(f"  ✅ {g['name']} id={g['dali_num']} ({len(members)} ламп на "
+            print(f"  [{i}/{total}] ✅ {g['name']} id={g['dali_num']} ({len(members)} ламп на "
                   f"{len(res.get('participants') or gws)} контроллерах) подтверждено"); ok += 1
         time.sleep(pace)
     if apply:
@@ -1141,11 +1178,13 @@ def do_autobright(ws, emap, apply, pace):
     """Автояркость (нет HA-сущности → применяем каждый раз). ПРОВЕРКА: ok (ack) + verify (readSensor
     показал наш luxRange)."""
     ok = warn = bad = 0
-    for b in AUTOBRIGHT:
+    total = len(AUTOBRIGHT)
+    for i, b in enumerate(AUTOBRIGHT, 1):
+        if stopped("автояркость", i - 1, total): break
         r = emap.get(b["sensor_il"])
-        if not r: print(f"  ПРОПУСК {b['sensor_il']}: не найден"); bad += 1; continue
+        if not r: print(f"  [{i}/{total}] ПРОПУСК {b['sensor_il']}: не найден"); bad += 1; continue
         if not apply:
-            print(f"  [dry] set_lux_keep {b['sensor_il']} → группа id={b['dali_num']} ({b['target']}±{b['tol']})"); ok += 1; continue
+            print(f"  [{i}/{total}] [dry] set_lux_keep {b['sensor_il']} → группа id={b['dali_num']} ({b['target']}±{b['tol']})"); ok += 1; continue
         want = [max(0, b["target"] - b["tol"]), b["target"] + b["tol"]]
         res = apply_cmd(ws, "arvid_dali_center/set_lux_keep", gw_sn=r["gw_sn"], devType=r["devType"],
                         channel=r["channel"], address=r["address"],
@@ -1153,11 +1192,11 @@ def do_autobright(ws, emap, apply, pace):
         entries = res.get("verify") or []
         seen = any(e.get("dpid") == 3 and e.get("luxRange") == want and e.get("outputObj") for e in entries)
         if not res.get("ok"):
-            print(f"  ❌ {b['sensor_il']}: НЕ подтверждено ({res.get('error') or 'шлюз не ack'})"); bad += 1
+            print(f"  [{i}/{total}] ❌ {b['sensor_il']}: НЕ подтверждено ({res.get('error') or 'шлюз не ack'})"); bad += 1
         elif not seen:
-            print(f"  ⚠ {b['sensor_il']} → id={b['dali_num']}: записано, но перечитка не показала luxRange {want}"); warn += 1
+            print(f"  [{i}/{total}] ⚠ {b['sensor_il']} → id={b['dali_num']}: записано, но перечитка не показала luxRange {want}"); warn += 1
         else:
-            print(f"  ✅ {b['sensor_il']} → id={b['dali_num']} подтверждено"); ok += 1
+            print(f"  [{i}/{total}] ✅ {b['sensor_il']} → id={b['dali_num']} подтверждено"); ok += 1
         time.sleep(pace)
     if apply:
         print(f"автояркость: ✅{ok} подтв., ⚠{warn} без сверки, ❌{bad} НЕ подтв.")
@@ -1170,13 +1209,15 @@ def do_panels(ws, emap, apply, pace):
     """Панели (нет HA-сущности → применяем каждый раз). ПРОВЕРКА по каждому действию: ok (ack) +
     verify.match (readPanel показал нашу цель). ✅ считаем тихо, печатаем только ⚠/❌ и итог."""
     ok = warn = bad = 0
-    for p in PANELS:
+    total = len(PANELS)
+    for i, p in enumerate(PANELS, 1):
+        if stopped("панели", i - 1, total): break
         r = emap.get(p["panel"])
-        if not r: print(f"  ПРОПУСК {p['panel']}: не найдена"); bad += 1; continue
+        if not r: print(f"  [{i}/{total}] ПРОПУСК {p['panel']}: не найдена"); bad += 1; continue
         kc = PANEL_KEYS.get(r["devType"], 0)
         for k in p["keys"]:
             if k["key"] > kc:
-                print(f"  ⚠ {p['panel']} кл{k['key']}: у панели {kc} клавиш — пропуск"); warn += 1; continue
+                print(f"  [{i}/{total}] ⚠ {p['panel']} кл{k['key']}: у панели {kc} клавиш — пропуск"); warn += 1; continue
             out = {"gwSnObj": r["gw_sn"], "devType": "0401", "channel": DALI_CHANNEL, "address": k["dali_num"]}
             for action, gesture in ((k["press"], GESTURE_PRESS), (k["hold"], GESTURE_HOLD)):
                 if not action: continue
@@ -1184,15 +1225,15 @@ def do_panels(ws, emap, apply, pace):
                 if prop is None: continue
                 lbl = f"{p['panel']} кл{k['key']} {'нажатие' if gesture == 1 else 'удерж'}={action}"
                 if not apply:
-                    print(f"  [dry] {lbl} → группа id={k['dali_num']}"); ok += 1; continue
+                    print(f"  [{i}/{total}] [dry] {lbl} → группа id={k['dali_num']}"); ok += 1; continue
                 res = apply_cmd(ws, "arvid_dali_center/add_panel_obj", gw_sn=r["gw_sn"], devType=r["devType"],
                                 channel=r["channel"], address=r["address"], keyNo=k["key"], dpid=gesture,
                                 panelType=2, mode=mode, replace=True, outObj=[dict(out, property=prop)])
                 v = res.get("verify") or {}
                 if not res.get("ok"):
-                    print(f"  ❌ {lbl}: НЕ подтверждено ({res.get('error') or 'шлюз не ack'})"); bad += 1
+                    print(f"  [{i}/{total}] ❌ {lbl}: НЕ подтверждено ({res.get('error') or 'шлюз не ack'})"); bad += 1
                 elif v.get("match") is False:
-                    print(f"  ⚠ {lbl}: записано, но цель НЕ привязалась (missing={v.get('missing')})"); warn += 1
+                    print(f"  [{i}/{total}] ⚠ {lbl}: записано, но цель НЕ привязалась (missing={v.get('missing')})"); warn += 1
                 else:
                     ok += 1
                 time.sleep(pace)
@@ -1215,17 +1256,19 @@ def do_areas(ws, apply):
     if not AREAS: return
     have = {a.get("area_id") for a in (ws.cmd("config/area_registry/list") or [])}
     ok = bad = 0
-    for it in AREAS:
+    total = len(AREAS)
+    for i, it in enumerate(AREAS, 1):
+        if stopped("пространства", i - 1, total): break
         aid = it["area_id"]
         if aid not in have:
-            print(f"  ⚠ {it['entity']}: области «{aid}» ({it['area_name']}) в HA НЕТ — пропуск")
+            print(f"  [{i}/{total}] ⚠ {it['entity']}: области «{aid}» ({it['area_name']}) в HA НЕТ — пропуск")
             bad += 1
             continue
         if not apply:
-            print(f"  [dry] {it['entity']} → {aid}"); ok += 1; continue
+            print(f"  [{i}/{total}] [dry] {it['entity']} → {aid}"); ok += 1; continue
         res = apply_cmd(ws, "config/entity_registry/update", entity_id=it["entity"], area_id=aid)
         assigned = (res.get("entity_entry") or {}).get("area_id") == aid
-        print(f"  {'OK' if assigned else '!'} {it['entity']} → {aid}"
+        print(f"  [{i}/{total}] {'OK' if assigned else '!'} {it['entity']} → {aid}"
               + ("" if assigned else " (назначение не подтвердилось)")); ok += 1
     print(f"пространства: {ok} обработано, {bad} без области")
 
@@ -1249,15 +1292,28 @@ def main():
                  f"рядом со скриптом / в /config/tools со строкой:\n  ha_token: eyJhbGciOi...")
     ws = WS(a.ha_url); ws.connect(); ws.auth(a.ha_token)
     emap = resolve(ws)
+    print("прогон: мягкая остановка поддерживается (SIGTERM между записями)")
     print(f"резолвер: {len(emap)} сущностей; режим: "
           + ("ЗАПИСЬ" if a.apply else "DRY-RUN (ничего не пишу)")
           + (" · FORCE" if a.force else "") + f" · пауза {a.pace}с\n")
-    if a.only in (None, "groups"):     print("── ГРУППЫ ──");     do_groups(ws, emap, a.apply, a.force, a.pace)
-    if a.only in (None, "groups") and CROSS:
+    # ⛔ между фазами тоже проверяем флаг: остановили на группах — в автояркость не лезем
+    if a.only in (None, "groups") and not STOP["on"]:
+        print("── ГРУППЫ ──");     do_groups(ws, emap, a.apply, a.force, a.pace)
+    if a.only in (None, "groups") and CROSS and not STOP["on"]:
         print("\n── КРОСС-ШЛЮЗОВЫЕ ГРУППЫ ──"); do_cross_groups(ws, emap, a.apply, a.force, a.pace)
-    if a.only in (None, "areas"):      print("\n── ПРОСТРАНСТВА (area) ──"); do_areas(ws, a.apply)
-    if a.only in (None, "autobright"): print("\n── АВТОЯРКОСТЬ ──"); do_autobright(ws, emap, a.apply, a.pace)
-    if a.only in (None, "panels"):     print("\n── ПАНЕЛИ ──");     do_panels(ws, emap, a.apply, a.pace)
+    if a.only in (None, "areas") and not STOP["on"]:
+        print("\n── ПРОСТРАНСТВА (area) ──"); do_areas(ws, a.apply)
+    if a.only in (None, "autobright") and not STOP["on"]:
+        print("\n── АВТОЯРКОСТЬ ──"); do_autobright(ws, emap, a.apply, a.pace)
+    if a.only in (None, "panels") and not STOP["on"]:
+        print("\n── ПАНЕЛИ ──");     do_panels(ws, emap, a.apply, a.pace)
+    # Последняя строка журнала — итог прогона. Карточка ищет именно её, чтобы отличить
+    # «остановлено человеком» от «упало само» (во втором случае строки просто нет).
+    if STOP["on"]:
+        print("\n⛔ ПРОГОН ОСТАНОВЛЕН ОПЕРАТОРОМ — незаписанное осталось незаписанным, "
+              "повторный запуск продолжит с того же места (готовые группы пропускаются)")
+        sys.exit(3)
+    print("\n✅ ПРОГОН ЗАВЕРШЁН")
 
 
 if __name__ == "__main__":

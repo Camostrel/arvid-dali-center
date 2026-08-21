@@ -2167,7 +2167,13 @@ class ArvidDaliPanel extends HTMLElement {
       // число устройств прямо в строке: при 25+ контроллерах сразу видно, какие ещё не
       // сканировали (0 уст.) — иначе это выясняется только перебором
       const cnt = g.devices != null ? ` · ${g.devices} уст.` : '';
-      return `<option value="${this._esc(g.gwSn)}"${g.gwSn === s.activeGw ? ' selected' : ''}>${this._esc(nm)}${cnt}${st}</option>`;
+      // ⚠ Хвост серийника ОБЯЗАТЕЛЕН, когда показываем имя (v1.2.81): имена шлюзов на объекте
+      // могут быть заводскими и ОДИНАКОВЫМИ у всех 27 контроллеров — тогда список из 27
+      // одинаковых строк неразличим. Хвост делает каждую строку уникальной, даже если человек
+      // ничего не переименовывал. Когда имени нет, показываем полный серийник — дублировать
+      // нечего.
+      const tail = (g.name && g.name !== g.gwSn) ? ` · ${this._gwTail(g.gwSn)}` : '';
+      return `<option value="${this._esc(g.gwSn)}"${g.gwSn === s.activeGw ? ' selected' : ''}>${this._esc(nm)}${tail}${cnt}${st}</option>`;
     }).join('');
     const ag = s.gateways.find((g) => g.gwSn === s.activeGw) || {};
     const sub = ag.gwSn ? `${this._esc(ag.gwSn)}${ag.ip ? ' · ' + ag.ip : ''} · sw ${ag.sw || '?'} · ${ag.devices != null ? ag.devices : 0} уст.` : '';

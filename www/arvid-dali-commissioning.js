@@ -21,7 +21,7 @@
 //       общим группам помещений, по умолчанию `ba_area_light`; зонным не ставим).
 // Бэкенд НЕ дублируем: используем те же WS arvid_dali_center/* и сервисы HA.
 
-const VERSION = '0.13';
+const VERSION = '0.14';
 const LS_KEY = 'arvid-dali-commissioning';
 
 // классы вкладок и префикс имени по типу устройства
@@ -429,9 +429,17 @@ class ArvidDaliCommissioning extends HTMLElement {
     const card = this.shadowRoot && this.shadowRoot.getElementById('card');
     if (!card) return;
     const s = this._s;
-    const gwOpts = s.gateways.map((g) =>
-      `<option value="${this._esc(g.gwSn)}"${g.gwSn === s.gw ? ' selected' : ''}>${this._esc(g.gwSn)}${g.connected ? '' : ' (offline)'}</option>`).join('')
-      || '<option value="">шлюзы не найдены</option>';
+    // Строка контроллера: ИМЯ (если задано) + хвост серийника + число устройств (v0.14).
+    // Раньше показывался только серийник — а на объекте человек ориентируется по НОМЕРУ ЛИНИИ,
+    // который живёт в имени шлюза. Хвост серийника оставляем всегда: имена могут быть
+    // заводскими и одинаковыми у всех 27 контроллеров, тогда без него список неразличим.
+    const gwOpts = s.gateways.map((g) => {
+      const named = g.name && g.name !== g.gwSn;
+      const nm = named ? `${this._esc(g.name)} · ${this._esc(String(g.gwSn).slice(-5))}`
+        : this._esc(g.gwSn);
+      const cnt = g.devices != null ? ` · ${g.devices} уст.` : '';
+      return `<option value="${this._esc(g.gwSn)}"${g.gwSn === s.gw ? ' selected' : ''}>${nm}${cnt}${g.connected ? '' : ' (offline)'}</option>`;
+    }).join('') || '<option value="">шлюзы не найдены</option>';
     // вкладка «Карта» появляется, только если карта лежит на боксе
     const allTabs = s.mapFiles.length ? TABS.concat([{ key: 'map', title: 'Карта' }]) : TABS;
     const tabs = allTabs.map((t) =>

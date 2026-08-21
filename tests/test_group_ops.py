@@ -212,6 +212,18 @@ class TestGatewayOrder(unittest.TestCase):
         order = [n or sn for n, sn in sorted(rows, key=lambda r: self._key(*r))]
         self.assertEqual(order, ["5.1", "ZZ999"])
 
+    def test_lists_stay_distinguishable_without_renaming(self):
+        """Имена шлюзов на объекте могут быть заводскими и ОДИНАКОВЫМИ у всех 27 контроллеров.
+        Тогда список из 27 строк неразличим — значит хвост серийника обязателен в обеих
+        карточках, а не только там, где имя уникально (v1.2.81)."""
+        base = pathlib.Path(__file__).resolve().parents[1] / "www"
+        panel = (base / "arvid-dali-panel.js").read_text(encoding="utf-8")
+        comm = (base / "arvid-dali-commissioning.js").read_text(encoding="utf-8")
+        self.assertIn("const tail = (g.name && g.name !== g.gwSn)", panel)
+        self.assertIn("const named = g.name && g.name !== g.gwSn", comm,
+                      "карта пусконаладки показывает только серийник — номер линии из имени "
+                      "шлюза не виден там, где он нужнее всего")
+
     def test_backend_actually_sorts(self):
         src = (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
                / "arvid_dali_center" / "websocket_api.py").read_text(encoding="utf-8")

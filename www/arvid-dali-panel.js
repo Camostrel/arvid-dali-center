@@ -2164,7 +2164,10 @@ class ArvidDaliPanel extends HTMLElement {
     const opts = s.gateways.map((g) => {
       const nm = (g.name && g.name !== g.gwSn) ? g.name : g.gwSn;
       const st = (g.state && g.state !== 'online') ? ' — нет связи' : '';
-      return `<option value="${this._esc(g.gwSn)}"${g.gwSn === s.activeGw ? ' selected' : ''}>${this._esc(nm)}${st}</option>`;
+      // число устройств прямо в строке: при 25+ контроллерах сразу видно, какие ещё не
+      // сканировали (0 уст.) — иначе это выясняется только перебором
+      const cnt = g.devices != null ? ` · ${g.devices} уст.` : '';
+      return `<option value="${this._esc(g.gwSn)}"${g.gwSn === s.activeGw ? ' selected' : ''}>${this._esc(nm)}${cnt}${st}</option>`;
     }).join('');
     const ag = s.gateways.find((g) => g.gwSn === s.activeGw) || {};
     const sub = ag.gwSn ? `${this._esc(ag.gwSn)}${ag.ip ? ' · ' + ag.ip : ''} · sw ${ag.sw || '?'} · ${ag.devices != null ? ag.devices : 0} уст.` : '';
@@ -3165,4 +3168,4 @@ option{background:#eaf3ff;color:#0F172A}
 customElements.define('arvid-dali-panel', ArvidDaliPanel);
 window.customCards = window.customCards || [];
 window.customCards.push({ type: 'arvid-dali-panel', name: 'ARVID DALI Panel', description: 'Управление интеграцией ARVID DALI Center.' });
-console.info('%c ARVID-DALI-PANEL %c v1.2.80 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');
+console.info('%c ARVID-DALI-PANEL %c v1.2.81 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');

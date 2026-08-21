@@ -6,7 +6,7 @@ from __future__ import annotations
 DOMAIN = "arvid_dali_center"
 
 # Версия (синхронизировать с manifest.json при изменении).
-VERSION = "1.2.80"
+VERSION = "1.2.81"
 
 # Событие HA при нажатии клавиши панели (v1.2.46). На нём стоят триггеры устройства
 # (device_trigger.py). Слушать НАДО именно событие: состояние event-сущности меняется ещё и

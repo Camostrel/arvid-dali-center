@@ -225,6 +225,22 @@ def async_register(hass: HomeAssistant) -> None:
         websocket_api.async_register_command(hass, cmd)
 
 
+def _gw_sort_key(h):
+    """Порядок контроллеров в списке — ЕСТЕСТВЕННЫЙ по имени (v1.2.81).
+
+    На объекте имена шлюзов — номера линий («2.6», «5.1», «2.10»), и человек ищет по ним.
+    Раньше порядок был «как загрузились ConfigEntry», то есть случайный: при 25–27 контроллерах
+    список превращался в лотерею. Сортировка ЧИСЛОВАЯ по частям, иначе «2.10» встало бы между
+    «2.1» и «2.2». Безымянный шлюз — по серийнику, и всегда ПОСЛЕ именованных.
+    """
+    import re
+    name = ((h.gw or {}).get("name") or "").strip()
+    raw = name or str(h.gw_sn or "")
+    parts = [(0, int(p)) if p.isdigit() else (1, p.lower())
+             for p in re.split(r"(\d+)", raw) if p not in ("", ".")]
+    return (0 if name else 1, parts, str(h.gw_sn or ""))
+
+
 @websocket_api.websocket_command({vol.Required("type"): "arvid_dali_center/gateways"})
 @callback
 def ws_gateways(hass, connection, msg):
@@ -245,7 +261,7 @@ def ws_gateways(hass, connection, msg):
         # по unique_id: entity_id мог получить суффикс при коллизии имён.
         "allLights": er.async_get(hass).async_get_entity_id(
             "light", DOMAIN, f"{h.gw_sn}_all_lights"),
-    } for h in _hubs(hass)]
+    } for h in sorted(_hubs(hass), key=_gw_sort_key)]
     connection.send_result(msg["id"], {"gateways": out})
 
 

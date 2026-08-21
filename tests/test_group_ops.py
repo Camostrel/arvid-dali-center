@@ -186,5 +186,37 @@ class TestGroupIdBusyIsVisible(unittest.TestCase):
                          "не попадают, и занятый номер опять будет предложен")
 
 
+class TestGatewayOrder(unittest.TestCase):
+    """v1.2.81: порядок контроллеров в списке — естественный по имени.
+
+    На объекте 25–27 контроллеров, имена = номера линий («2.6», «5.1»). Порядок «как
+    загрузились ConfigEntry» превращал выпадающий список в лотерею.
+    """
+
+    @staticmethod
+    def _key(name, sn):
+        import re
+        raw = (name or "").strip() or str(sn or "")
+        parts = [(0, int(p)) if p.isdigit() else (1, p.lower())
+                 for p in re.split(r"(\d+)", raw) if p not in ("", ".")]
+        return (0 if (name or "").strip() else 1, parts, str(sn or ""))
+
+    def test_numeric_parts_sort_as_numbers(self):
+        """«2.10» обязана идти ПОСЛЕ «2.2», а не между «2.1» и «2.2» (строковая сортировка)."""
+        names = ["2.10", "2.2", "5.1", "2.1", "10.1"]
+        order = sorted(names, key=lambda n: self._key(n, "X"))
+        self.assertEqual(order, ["2.1", "2.2", "2.10", "5.1", "10.1"])
+
+    def test_unnamed_go_last(self):
+        rows = [(None, "ZZ999"), ("5.1", "A")]
+        order = [n or sn for n, sn in sorted(rows, key=lambda r: self._key(*r))]
+        self.assertEqual(order, ["5.1", "ZZ999"])
+
+    def test_backend_actually_sorts(self):
+        src = (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
+               / "arvid_dali_center" / "websocket_api.py").read_text(encoding="utf-8")
+        self.assertIn("sorted(_hubs(hass), key=_gw_sort_key)", src)
+
+
 if __name__ == "__main__":
     unittest.main()

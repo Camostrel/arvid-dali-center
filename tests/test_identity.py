@@ -348,5 +348,42 @@ class TestWipeTargetsAreDevicesOnly(unittest.TestCase):
         self.assertIn("is_addr_key(ident) or is_valid_devsn(ident)", body)
 
 
+class TestNoManualKeyAssembly(unittest.TestCase):
+    """v1.2.80: ключ НЕ собирается вручную из `devSn` и адреса — только через хаб.
+
+    Найдено при разборе «что не готово в адресном режиме». Худшее из трёх мест — `ws_rename`:
+    там ручная сборка стояла на ПРЯМОМ пути, и в адресном режиме карточка устройства не
+    находилась → `name_by_user` молча не обновлялся. На переезде объекта это ~1000 устройств
+    с переименованными сущностями и шаблонными карточками.
+    """
+
+    def _src(self):
+        return (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
+                / "arvid_dali_center" / "websocket_api.py").read_text(encoding="utf-8")
+
+    def test_rename_asks_hub_for_card_key(self):
+        self.assertIn("dev_ident = (hub.identity(d, light=t in LIGHT_T)", self._src())
+
+    def test_entity_resolver_asks_hub(self):
+        src = self._src()
+        self.assertIn("base = hub.identity(d)", src)
+        self.assertIn("light_uid = hub.identity(d, light=True)", src)
+
+    def test_legacy_uid_prefers_hub(self):
+        src = self._src()
+        self.assertIn("def _legacy_uid(gw_sn: str, d: dict, role: str, hub=None)", src)
+        self.assertIn('_legacy_uid(msg["gw_sn"], d, role, hub)', src)
+
+    def test_energy_report_exposes_honest_key(self):
+        """Карточка шлёт ключ обратно в `energy_set_params` — он обязан совпадать с тем, по
+        которому ведётся учёт, иначе заданная мощность просто не найдётся."""
+        e = (pathlib.Path(__file__).resolve().parents[1] / "custom_components"
+             / "arvid_dali_center" / "energy" / "websocket_api.py").read_text(encoding="utf-8")
+        self.assertIn('"ident": devsn', e)
+        card = (pathlib.Path(__file__).resolve().parents[1] / "www"
+                / "arvid-dali-panel.js").read_text(encoding="utf-8")
+        self.assertIn("l.ident || l.devSn", card)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -133,8 +133,15 @@ def _entities(hass: HomeAssistant, gw_sn: str, d: dict, hub=None) -> dict:
     t = str(d.get("devType"))
     ch, addr, sn = d.get("channel"), d.get("address"), d.get("devSn")
     key = dev_state_key(t, ch, addr)
-    base = sn or f"{gw_sn}:{ch}:{addr}"          # для датчиков/панелей (без devType)
-    light_uid = sn or f"{gw_sn}:{t}:{ch}:{addr}"  # для ламп (с devType)
+    # Фолбэк-uid (когда сущность не зарегистрирована в хабе — оффлайн-устройства): ключ берём
+    # у хаба, он один знает режим. Ручная сборка «devSn или адрес» промахнулась бы в адресном
+    # режиме, и резолв `entity_id` для таких устройств молча возвращал бы пусто (v1.2.80).
+    if hub is not None:
+        base = hub.identity(d)
+        light_uid = hub.identity(d, light=True)
+    else:
+        base = sn or f"{gw_sn}:{ch}:{addr}"          # для датчиков/панелей (без devType)
+        light_uid = sn or f"{gw_sn}:{t}:{ch}:{addr}"  # для ламп (с devType)
 
     def _eid(role: str, domain: str, fallback_uid: str):
         uid = (hub.entity_uid(role, key) if hub else None) or fallback_uid
@@ -1606,10 +1613,17 @@ def _rename_roles(gw_sn: str, d: dict, name: str) -> list[tuple]:
     return []
 
 
-def _legacy_uid(gw_sn: str, d: dict, role: str) -> str:
-    """Реконструкция unique_id по devSn (fallback для оффлайн-устройств без живой сущности)."""
+def _legacy_uid(gw_sn: str, d: dict, role: str, hub=None) -> str:
+    """Реконструкция unique_id (fallback для оффлайн-устройств без живой сущности).
+
+    ⚠ v1.2.80: если хаб доступен — ключ берём у него (`identity`), он один знает режим.
+    Прежняя ручная сборка «devSn или адрес» в адресном режиме давала ЧУЖОЙ uid, и реконструкция
+    молча не находила ничего."""
     t = str(d.get("devType"))
     ch, addr, sn = d.get("channel"), d.get("address"), d.get("devSn")
+    if hub is not None:
+        base = hub.identity(d, light=(role == "light"))
+        return base if role == "light" else f"{base}_{role}"
     if role == "light":
         return sn or f"{gw_sn}:{t}:{ch}:{addr}"
     base = sn or f"{gw_sn}:{ch}:{addr}"
@@ -1644,7 +1658,7 @@ async def ws_rename(hass, connection, msg):
     plan = []
     for domain, role, key, object_id, friendly in _rename_roles(msg["gw_sn"], d, name):
         # uid из карты хаба (устойчив к дрейфу devSn у датчиков); fallback — реконструкция
-        uid = (hub.entity_uid(role, key) if hub else None) or _legacy_uid(msg["gw_sn"], d, role)
+        uid = (hub.entity_uid(role, key) if hub else None) or _legacy_uid(msg["gw_sn"], d, role, hub)
         eid = reg.async_get_entity_id(domain, DOMAIN, uid)
         oid = slugify(object_id) or f"dev_{msg['address']}"
         plan.append((domain, uid, eid, f"{domain}.{oid}", friendly))
@@ -1691,8 +1705,13 @@ async def ws_rename(hass, connection, msg):
             reg.async_update_entity(eid, name=friendly)
     # имя HA-device (для дашбордов): идентификатор устройства
     t = str(msg["devType"])
-    dev_ident = (d["devSn"] or (f"{msg['gw_sn']}:{t}:{msg['channel']}:{msg['address']}"
-                                if t in LIGHT_T else f"{msg['gw_sn']}:{msg['channel']}:{msg['address']}"))
+    # 🔴 v1.2.80: ключ карточки спрашиваем у ХАБА. Здесь стояла ручная сборка «devSn или
+    # адресный фолбэк» — в адресном режиме карточка ключуется `addr:…`, поиск по серийнику её
+    # не находил, и `name_by_user` устройства молча не обновлялся: сущности переименованы,
+    # а карточка осталась шаблонной. На переезде объекта это ~1000 устройств.
+    dev_ident = (hub.identity(d, light=t in LIGHT_T) if hub else
+                 (d["devSn"] or (f"{msg['gw_sn']}:{t}:{msg['channel']}:{msg['address']}"
+                                 if t in LIGHT_T else f"{msg['gw_sn']}:{msg['channel']}:{msg['address']}")))
     dev = dev_reg.async_get_device(identifiers={(DOMAIN, dev_ident)})
     if dev:
         dev_reg.async_update_device(dev.id, name_by_user=name)

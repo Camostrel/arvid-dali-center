@@ -2822,7 +2822,7 @@ class ArvidDaliPanel extends HTMLElement {
       title = 'Параметры ламп';
       const e = this._state.energyPage || { lamps: [] };
       const selAll = `<label class="chk"><input type="checkbox" onclick="this.closest('.dialog').querySelectorAll('[data-en]').forEach(c=>c.checked=this.checked)"><span><b>Выбрать все (${e.lamps.length})</b></span></label>`;
-      const lampRows = e.lamps.map((l) => `<label class="chk"><input type="checkbox" data-en="${l.devSn}"><span>${this._esc(l.name)} <em>${l.power_w != null ? l.power_w + ' Вт' : 'мощн. не задана'}${l.model ? ' · ' + this._esc(l.model) : ''}</em></span></label>`).join('');
+      const lampRows = e.lamps.map((l) => `<label class="chk"><input type="checkbox" data-en="${l.ident || l.devSn}"><span>${this._esc(l.name)} <em>${l.power_w != null ? l.power_w + ' Вт' : 'мощн. не задана'}${l.model ? ' · ' + this._esc(l.model) : ''}</em></span></label>`).join('');
       // Кривая драйвера (v1.1.3): форма «яркость→мощность». Список приходит из energy_data.
       const curveOpts = (e.curves || []).map((c) => `<option value="${this._esc(c.id)}">${this._esc(c.label)}</option>`).join('');
       body = `<div class="muted" style="margin-bottom:6px">Отметьте лампы и задайте мощность/кривую — применится всем выбранным.</div>
@@ -3165,4 +3165,4 @@ option{background:#eaf3ff;color:#0F172A}
 customElements.define('arvid-dali-panel', ArvidDaliPanel);
 window.customCards = window.customCards || [];
 window.customCards.push({ type: 'arvid-dali-panel', name: 'ARVID DALI Panel', description: 'Управление интеграцией ARVID DALI Center.' });
-console.info('%c ARVID-DALI-PANEL %c v1.2.79 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');
+console.info('%c ARVID-DALI-PANEL %c v1.2.80 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');

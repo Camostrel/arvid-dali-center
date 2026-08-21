@@ -111,7 +111,12 @@ def ws_energy_data(hass, connection, msg):
         # зона/этаж из реестра HA — для фильтров отчёта в карточке
         _name, area, floor = _resolve_device(dreg, areg, freg, devsn)
         lamps.append({
+            # ⚠ Поле исторически зовётся `devSn`, но содержит КЛЮЧ ИДЕНТИЧНОСТИ: в адресном
+            # режиме это координата, а не серийник. Имя оставлено ради внешнего потребителя
+            # (docs/WEB_INTERFACE_API.md), рядом отдаём честное `ident` — им и надо пользоваться
+            # (карточка шлёт его обратно в `energy_set_params`, v1.2.80).
             "devSn": devsn,
+            "ident": devsn,
             "power_w": rec.get("power_w"),
             "model": rec.get("model"),
             "energy_wh": rec.get("energy_wh", 0.0),

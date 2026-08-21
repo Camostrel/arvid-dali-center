@@ -17,7 +17,7 @@
 //       ручном переименовании), область — отдельным вызовом set_area. Ничего из работающего
 //       не переписано. Карты нет на боксе → вкладки нет вовсе.
 //       Пространство в строке — тоже поле: предзаполнено из карты, правится руками.
-//       Внутри вкладки два экрана: «Устройства» (имена+области) и «Группы» (ярлык
+//       Внутри вкладки экраны: «Устройства» (имена+области) и «Ярлыки» (ярлык
 //       общим группам помещений, по умолчанию `ba_area_light`; зонным не ставим).
 // Бэкенд НЕ дублируем: используем те же WS arvid_dali_center/* и сервисы HA.
 
@@ -648,7 +648,7 @@ class ArvidDaliCommissioning extends HTMLElement {
     const v = this._s.mapView;
     const sw = `<div class="tabs">
       <button class="tab sm${v === 'dev' ? ' on' : ''}" data-act="mapView" data-v="dev">Устройства</button>
-      <button class="tab sm${v === 'grp' ? ' on' : ''}" data-act="mapView" data-v="grp">Группы</button>
+      <button class="tab sm${v === 'grp' ? ' on' : ''}" data-act="mapView" data-v="grp">Ярлыки</button>
       <button class="tab sm${v === 'plan' ? ' on' : ''}" data-act="mapView" data-v="plan">План</button>
     </div>`;
     // У «Плана» своя шапка не нужна: селектор файла карты, фильтры строк и чекбокс области
@@ -658,7 +658,9 @@ class ArvidDaliCommissioning extends HTMLElement {
     return sw + (v === 'grp' ? this._grpHead() : this._mapHead());
   }
 
-  // ── экран «Группы»: ярлык общим группам помещений ───────────────────────────
+  // ── экран «Ярлыки»: раздача ЯРЛЫКА группам (обычно общим по помещению) ──────
+  // ⚠ Экран называется «Ярлыки», а не «Группы» (2026-08-20): групп он не создаёт и не
+  // правит — только вешает/снимает ярлык. Прежнее имя путало на объекте.
   _grpHead() {
     const s = this._s;
     const total = s.groups.length;
@@ -673,8 +675,9 @@ class ArvidDaliCommissioning extends HTMLElement {
       <label class="fld"><span>Ярлык (создастся, если такого нет)</span>
         <input class="rw-name" type="text" id="grpLabel" data-act="grpLabel"
                value="${this._esc(s.grpLabel)}" placeholder="без ярлыка — снять"></label>
-      <div class="warnbox">Отмечены общие группы помещений (в имени <b>obshchii</b>).
-        Зонным группам ярлык не ставим — отметьте вручную, если нужно.</div>`;
+      <div class="warnbox">Только ЯРЛЫКИ: группы здесь не создаются и не правятся —
+        ставится или снимается метка. Отмечены общие группы помещений (в имени
+        <b>obshchii</b>); зонным ярлык не нужен — отметьте вручную, если требуется.</div>`;
   }
 
   _grpRow(g) {

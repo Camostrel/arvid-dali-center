@@ -2346,6 +2346,29 @@ async def _xgroup_used_ids(hass, gw_sns: list) -> dict:
     return used
 
 
+def _slots_detail(hass, gw_sns: list) -> dict:
+    """Чем именно занят каждый номер на шлюзе: `{gw: [{groupId, kind, name}]}`.
+
+    Зачем не только множество занятых (`_xgroup_used_ids`): человек в диалоге создания должен
+    видеть ПРИЧИНУ, а не просто «нельзя». Замечание пользователя 2026-08-20: карточка
+    предлагала номер 3, занятый КРОСС-группой, и отказ приходил уже от бэкенда — выглядело
+    как ошибка на ровном месте.
+    """
+    from .store import get_cross_group_store
+    xgs = get_cross_group_store(hass)
+    out: dict = {}
+    for gw in gw_sns:
+        hub = _find_hub(hass, gw)
+        items = [{"groupId": g["groupId"], "kind": "group", "name": g.get("name") or ""}
+                 for g in (hub.groups if hub else []) if g.get("present")]
+        # кросс-группы в `hub.groups` не попадают (гейт в `async_load_groups`), но слот на
+        # контроллере занимают физически — именно этого и не видела карточка
+        items += [{"groupId": g["groupId"], "kind": "cross", "name": g.get("name") or ""}
+                  for g in (xgs.for_gateway(gw) if xgs else [])]
+        out[gw] = sorted(items, key=lambda x: x["groupId"])
+    return out
+
+
 async def _xgroup_write(hass, uid, channel, group_id, name, members) -> dict:
     """Записать кросс-группу: `delGroup`+`addGroup`+`readGroup` НА КАЖДОМ участнике.
 
@@ -2442,10 +2465,14 @@ async def ws_group_slots(hass, connection, msg):
     Карточка спрашивает ДО создания: номер обязан быть свободен у ВСЕХ участников, иначе
     `addGroup` ляжет ПОВЕРХ чужой группы на одном из них — и сверка этого не покажет
     (`readGroup` читает нашу же таблицу, а биты на чужих лампах уже перезаписаны)."""
-    used = await _xgroup_used_ids(hass, list(msg["gw_sns"]))
+    gws = list(msg["gw_sns"])
+    used = await _xgroup_used_ids(hass, gws)
     connection.send_result(msg["id"], {
         "used": {gw: sorted(ids) for gw, ids in used.items()},
         "free": group_ops.free_group_ids(used),
+        # ЧЕМ занят номер — чтобы диалог мог объяснить, а не просто запретить (v1.2.79)
+        "busy": _slots_detail(hass, gws),
+        "range": [group_ops.DALI_GROUP_MIN, group_ops.DALI_GROUP_MAX],
     })
 
 

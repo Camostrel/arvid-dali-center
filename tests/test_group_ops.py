@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import importlib.util
 import sys
 import unittest
@@ -148,6 +150,40 @@ class TestCrossGroupUid(unittest.TestCase):
 
     def test_blank_serials_skipped(self):
         self.assertEqual(group_ops.cross_group_uid([GW_A, "", None], 0, 1), "xgrp_88727_0_1")
+
+
+class TestGroupIdBusyIsVisible(unittest.TestCase):
+    """v1.2.79: номер, занятый КРОСС-группой, не должен предлагаться при создании обычной.
+
+    Корень дефекта: копии кросс-групп намеренно не попадают в `hub.groups` (иначе на один свет
+    было бы три сущности), поэтому карточка, считавшая занятость по своему списку групп,
+    показывала слот свободным. Гейт на бэкенде был — человек узнавал об отказе уже после
+    нажатия «Создать».
+    """
+
+    def _src(self, rel):
+        base = pathlib.Path(__file__).resolve().parents[1]
+        return (base / rel).read_text(encoding="utf-8")
+
+    def test_backend_reports_what_occupies_the_slot(self):
+        src = self._src("custom_components/arvid_dali_center/websocket_api.py")
+        self.assertIn("def _slots_detail(", src)
+        self.assertIn('"busy": _slots_detail(hass, gws)', src)
+        # кросс-группы обязаны попасть в отчёт — ради них всё и делалось
+        i = src.index("def _slots_detail(")
+        body = src[i:src.index("\n\n\n", i)]
+        self.assertIn('"kind": "cross"', body)
+        self.assertIn('"kind": "group"', body)
+
+    def test_card_does_not_compute_busy_from_its_own_list(self):
+        """Карточка обязана СПРАШИВАТЬ занятость, а не выводить её из `_state.groups`."""
+        src = self._src("www/arvid-dali-panel.js")
+        i = src.index("_openCreateGroup(")
+        body = src[i:src.index("\n  async _saveCreateGroup", i)]
+        self.assertIn("arvid_dali_center/group_slots", body)
+        self.assertNotIn("this._state.groups.map((g) => g.groupId)", body,
+                         "занятость снова считается по локальному списку — кросс-группы туда "
+                         "не попадают, и занятый номер опять будет предложен")
 
 
 if __name__ == "__main__":

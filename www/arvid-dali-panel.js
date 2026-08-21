@@ -1240,18 +1240,49 @@ class ArvidDaliPanel extends HTMLElement {
     return na.localeCompare(nb, undefined, { numeric: true, sensitivity: 'base' });
   }
 
-  _openCreateGroup() {
+  async _openCreateGroup() {
     // сортируем сам массив lights (а не только рендер): чекбоксы адресуют m.lights[i] по
     // индексу при сохранении, поэтому порядок в state и в UI должен совпадать
     const lights = this._state.devices.filter((d) => LIGHT_T.includes(String(d.devType)))
       .sort((a, b) => this._cmpByName(a, b));
-    const used = new Set(this._state.groups.map((g) => g.groupId));
-    // DALI-групп физически 16 (0–15). Ищем первый свободный; все заняты → предупреждаем и не
-    // открываем диалог (раньше gid доходил до 16 и уходил на шину — бэкенд теперь это отвергает).
-    let gid = 0; while (gid < 16 && used.has(gid)) gid++;
+    const gw = this._state.activeGw;
+    // 🔴 Занятость спрашиваем У БЭКЕНДА (v1.2.79). Раньше считали по `_state.groups` — а там
+    // ТОЛЬКО обычные группы: копии кросс-групп в `hub.groups` не кладутся намеренно (иначе на
+    // один свет было бы три сущности). Поэтому слот, занятый кросс-группой, выглядел свободным
+    // и предлагался первым — человек жал «Создать» и получал отказ от бэкенда на ровном месте
+    // (замечание пользователя 2026-08-20).
+    let busy = [];
+    try {
+      const r = await this._ws({ type: 'arvid_dali_center/group_slots', gw_sns: [gw] });
+      busy = (r.busy && r.busy[gw]) || [];
+    } catch (e) {
+      this._toast('Не удалось прочитать занятые номера: ' + e.message, true);
+      return;   // без этого списка диалог снова предлагал бы занятый номер — лучше не открывать
+    }
+    const usedIds = new Set(busy.map((b) => b.groupId));
+    let gid = 0; while (gid < 16 && usedIds.has(gid)) gid++;
     if (gid > 15) { this._toast('Все 16 DALI-групп заняты (0–15). Удалите ненужную.', true); return; }
-    this._state.modal = { kind: 'createGroup', name: '', groupId: gid, lights };
+    this._state.modal = { kind: 'createGroup', name: '', groupId: gid, lights, busy };
     this._render();
+  }
+
+  // Выпадающий список номеров DALI-группы. Показываем ВСЕ 16 — занятые видно и понятно, ЧЕМ
+  // они заняты (принцип «проблемы должны быть видны»); выбрать их нельзя. Прятать занятые
+  // хуже: человек не поймёт, почему номера «скачут», и решит, что это ошибка.
+  _groupIdSelect(m) {
+    const by = new Map((m.busy || []).map((b) => [b.groupId, b]));
+    const opts = [];
+    for (let n = 0; n <= 15; n++) {
+      const b = by.get(n);
+      if (b) {
+        const kind = b.kind === 'cross' ? 'кросс-группа' : 'группа';
+        const name = b.name ? ` «${this._esc(b.name)}»` : '';
+        opts.push(`<option value="${n}" disabled>${n} — занят: ${kind}${name}</option>`);
+      } else {
+        opts.push(`<option value="${n}"${n === m.groupId ? ' selected' : ''}>${n}</option>`);
+      }
+    }
+    return `<select id="grpId">${opts.join('')}</select>`;
   }
 
   async _saveCreateGroup() {
@@ -2529,7 +2560,7 @@ class ArvidDaliPanel extends HTMLElement {
       }).join('') || '<div class="muted">Нет ламп на шлюзе</div>';
       const head = isEdit
         ? `<div class="grid"><label class="fld"><span>Имя</span><input id="grpName" type="text" value="${(m.name || '').replace(/"/g, '&quot;')}" placeholder="Группа"></label><label class="fld"><span>Номер</span><input id="grpId" type="number" value="${m.groupId}" disabled></label></div><div class="muted" style="margin:2px 0 4px">Снятые лампы убираются, отмеченные добавляются: группа пересоздаётся целиком.</div>`
-        : `<div class="grid"><label class="fld"><span>Имя</span><input id="grpName" type="text" value="${m.name}" placeholder="Группа"></label><label class="fld"><span>Номер (0-15)</span><input id="grpId" type="number" min="0" max="15" value="${m.groupId}"></label></div>`;
+        : `<div class="grid"><label class="fld"><span>Имя</span><input id="grpName" type="text" value="${m.name}" placeholder="Группа"></label><label class="fld"><span>Номер (0-15)</span>${this._groupIdSelect(m)}</label></div>`;
       // список выше базовых 240px — состав групп это 20+ ламп, скролл под большой набор
       body = `${head}<div class="chk-h">Лампы группы</div><div class="chk-list" style="max-height:60vh;overflow:auto">${rows}</div>`;
     } else if (m.kind === 'xgroup') {
@@ -3134,4 +3165,4 @@ option{background:#eaf3ff;color:#0F172A}
 customElements.define('arvid-dali-panel', ArvidDaliPanel);
 window.customCards = window.customCards || [];
 window.customCards.push({ type: 'arvid-dali-panel', name: 'ARVID DALI Panel', description: 'Управление интеграцией ARVID DALI Center.' });
-console.info('%c ARVID-DALI-PANEL %c v1.2.78 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');
+console.info('%c ARVID-DALI-PANEL %c v1.2.79 ', 'background:#0284C7;color:#fff;border-radius:4px 0 0 4px;padding:2px 6px', 'background:#e7f1ff;color:#0284C7;border-radius:0 4px 4px 0;padding:2px 6px');
